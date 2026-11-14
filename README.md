@@ -10,6 +10,7 @@ FlyRank backend capstone. Every requirement has captured proof in [EVIDENCE.md](
 - **402 vs 429.** `402 payment_required` when paying fixes it (Free plan exhausted, subscription past due); `429 quota_exceeded` + `Retry-After` when only waiting fixes it (Pro exhausted until the month resets).
 - **Cost.** Integer micro-USD. Cached input, fresh input, output and reasoning tokens are priced separately from pinned constants in [config/pricing.toml](config/pricing.toml), summed exactly and rounded once.
 - **Stripe.** Checkout in test mode; webhooks are signature-checked, de-duplicated by event id, and applied by a background worker with retries, backoff and a dead-event alert.
+- **Usage alerts (stretch).** When a tenant reaches 80% and 100% of a monthly limit, exactly one alert per threshold is queued in the same transaction as the usage and delivered by the worker to a signed webhook (Slack-compatible) or the log, with retries. Tenants see them at `GET /alerts`.
 
 ## Plans
 | Plan | API calls / month | AI tokens / month | When exhausted |
@@ -36,7 +37,7 @@ flowchart LR
     browser([Browser]) -->|pays 4242...| checkout[Stripe Checkout]
     subgraph compose[docker compose]
         api[FastAPI api<br/>routes -> services -> repositories]
-        worker[worker<br/>retries, backoff, dead-event alert]
+        worker[worker<br/>Stripe events + usage alerts<br/>retries, backoff, dead-letter alert]
         db[(Postgres 16)]
         cli[Stripe CLI<br/>optional, test mode]
     end
@@ -47,6 +48,7 @@ flowchart LR
     api -->|verified event, dedupe by id| db
     worker -->|FOR UPDATE SKIP LOCKED| db
     worker -->|fetch subscription| stripe[(Stripe API)]
+    worker -->|signed 80% / 100% alerts| hook([Alert webhook<br/>e.g. Slack])
 ```
 - **Layers:** `app/api` (HTTP only) → `app/services` (rules; `quota.py` and `pricing.py` are pure) → `app/repositories` (SQL, always scoped by `tenant_id`). See [docs/architecture.md](docs/architecture.md).
 - **Write path:** [docs/idempotency.md](docs/idempotency.md) · **quota rules:** [docs/quotas.md](docs/quotas.md) · **Stripe:** [docs/stripe.md](docs/stripe.md) · **worker:** [docs/background-jobs.md](docs/background-jobs.md) · **tables:** [docs/data-model.md](docs/data-model.md).
@@ -94,12 +96,16 @@ Interactive API docs: http://localhost:8000/docs
 
 Details and troubleshooting: [docs/stripe.md](docs/stripe.md).
 
+### Usage alerts (optional webhook)
+Alerts work with no setup: the worker writes them to its log (`docker compose logs worker | grep USAGE_ALERT`). To receive them over HTTP, set `ALERT_WEBHOOK_URL` in `.env` (a Slack incoming webhook works as-is) and optionally `ALERT_WEBHOOK_SECRET` to sign each POST (`X-Alert-Signature: t=…,v1=<HMAC-SHA256>`), then `docker compose up -d --force-recreate worker`. Details: [docs/background-jobs.md](docs/background-jobs.md#usage-alerts-stretch-goal-built).
+
 ## Endpoints
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `GET` | `/health` | none | Liveness + database check |
 | `POST` | `/generate` | `X-API-Key`, `Idempotency-Key` | Simulated AI call; meters 1 API call + tokens; returns its cost |
 | `GET` | `/usage` | `X-API-Key` | This month's usage, limits, remaining, and cost rollup |
+| `GET` | `/alerts` | `X-API-Key` | This month's 80% / 100% usage alerts and their delivery status |
 | `POST` | `/billing/checkout` | `X-API-Key` | Stripe Checkout URL for the Pro plan |
 | `GET` | `/billing/success`, `/billing/cancel` | none | Checkout redirect pages (display only) |
 | `POST` | `/webhooks/stripe` | `Stripe-Signature` | Verified Stripe events, queued for the worker |
@@ -109,13 +115,14 @@ Every error uses one envelope: `{"error": {"code", "message", "details"}}`. Full
 ## Test it
 ```bash
 docker compose exec api pytest -q                       # unit + integration (real Postgres)
-docker compose exec api python scripts/probes.py        # acceptance probes P1, P2, P4, P5
+docker compose exec api python scripts/probes.py        # acceptance probes P1, P2, P4, P5 + alerts A1
 docker compose exec api python -u scripts/probes.py --only P3   # live Checkout: pay in the browser
 ```
 Integration tests run against a separate `billing_test` database created by the compose Postgres on first start.
 
 ## Limitations (honest)
-- **Alerts go to logs.** A dead Stripe event logs `ALERT stripe_event_dead`; there is no email/Slack/pager sink.
+- **Operator alerts go to logs.** A dead Stripe event or undeliverable usage alert logs `ALERT …`; there is no pager integration.
+- **Usage alerts use one webhook for all tenants** (an operator channel), and delivery is at-least-once (receivers de-duplicate on `alert_id`). Per-tenant endpoints and email are not built.
 - **Cost is a usage figure, not an invoice.** The USD cost in `/usage` is computed by this service; it is not sent to Stripe as metered billing. Stripe only charges the flat Pro subscription (in the Stripe account's currency).
 - **One price book per period.** Events do not store the pricing version, so changing `pricing.toml` mid-month re-prices the whole month. Fine for a pinned config; a real system would version prices per event.
 - **Local webhooks depend on the Stripe CLI.** While the CLI reconnects it does not forward events (`stripe events resend` redelivers them). Production would use a dashboard webhook endpoint.

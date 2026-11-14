@@ -24,7 +24,7 @@ Body (simulated usage):
 Validation: all ints ≥ 0; `cached_input_tokens <= input_tokens`; total tokens ≤ 1,000,000 per request.
 | Status | When |
 |---|---|
-| 200 | Accepted and metered. Body: `{request_id, idempotency_key, metered: {api_calls: 1, ai_tokens: N}, usage: {metric: {used, limit, remaining}}, period: {start, end}, cost}` — `cost` is this request's price (shape below) |
+| 200 | Accepted and metered. Body: `{request_id, idempotency_key, metered: {api_calls: 1, ai_tokens: N}, usage: {metric: {used, limit, remaining}}, period: {start, end}, cost, alerts_triggered}` — `cost` is this request's price (shape below); `alerts_triggered` lists any 80%/100% thresholds it crossed |
 | 200 (replay) | Same key + same body → stored body verbatim, header `Idempotent-Replayed: true` |
 | 402 `payment_required` | Free plan quota exhausted (upgrade) or subscription `past_due`/`unpaid` |
 | 429 `quota_exceeded` | Pro quota exhausted; `Retry-After` = seconds to period end |
@@ -64,6 +64,21 @@ All amounts are integer micro-USD (`1 USD = 1,000,000`). Example for request E1 
 }
 ```
 `lines` explain the bill; `total_microusd` is authoritative. Token lines are each rounded half-up for display, while the token subtotal divides the summed numerators once, so `sum(lines) + rounding_adjustment_microusd == total_microusd` always holds (the adjustment is at most ±1 µ$ per line). `quantity` for `input_tokens` is *fresh* input (input minus cached); `output_tokens` includes reasoning. Rules: [pricing.md](pricing.md).
+
+### GET /alerts
+This tenant's usage alerts for the current month (stretch goal; [background-jobs.md](background-jobs.md#usage-alerts-stretch-goal-built)).
+```json
+{
+  "tenant": "acme",
+  "period": { "start": "2026-11-01T00:00:00Z", "end": "2026-12-01T00:00:00Z" },
+  "thresholds_percent": [80, 100],
+  "alerts": [
+    { "metric": "api_calls", "threshold_percent": 80, "plan": "free", "used": 800, "limit": 1000,
+      "status": "sent", "triggered_at": "2026-11-14T13:22:01Z", "sent_at": "2026-11-14T13:22:02Z" }
+  ]
+}
+```
+`status`: `pending` (queued), `sent`, `dead` (delivery failed 5 times). `POST /generate` also returns `alerts_triggered: [{metric, threshold_percent}]` for the thresholds that request crossed (usually empty).
 
 ### POST /billing/checkout
 → `200 {"checkout_url": "https://checkout.stripe.com/…", "session_id": "cs_test_…"}`. Already Pro and active → `409 already_subscribed`. Stripe error → `502 stripe_error`; Stripe env vars missing → `503 stripe_not_configured`.

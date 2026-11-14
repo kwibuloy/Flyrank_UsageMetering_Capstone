@@ -77,6 +77,23 @@ Index: `(tenant_id, period_start, metric)` for rollups.
 | processed_at | timestamptz null | set when `done` |
 Index: `(status, next_attempt_at)` for the worker claim query.
 
+### usage_alerts (stretch: 80% / 100% alerts)
+| column | type | notes |
+|---|---|---|
+| id | bigint identity PK | sent as `alert_id` so receivers can de-duplicate |
+| tenant_id | uuid FK (cascade) | |
+| period_start | date | |
+| metric | text (check) | `api_calls` \| `ai_tokens` |
+| threshold_percent | int (check) | `80` \| `100` |
+| plan_id | text | plan when it fired |
+| quota_limit | bigint (> 0) | limit when it fired; part of the unique key so a new limit re-arms |
+| used_at_trigger | bigint | usage right after the crossing request |
+| status | text (check) | `pending` \| `sent` \| `dead` |
+| attempts, next_attempt_at, last_error | | same retry fields as `stripe_events` |
+| delivery | text null | e.g. `webhook 204`, `log` |
+| created_at, sent_at | timestamptz | |
+Unique: `(tenant_id, period_start, metric, threshold_percent, quota_limit)` — the "once per threshold" guarantee. Indexes: `(status, next_attempt_at)` for the worker, `(tenant_id, period_start)` for `GET /alerts`.
+
 ## Tenant isolation
 - Tenant is resolved **only** from `X-API-Key`; no tenant id in URLs or bodies.
 - Every repository function on tenant-owned tables takes `tenant_id` as a required argument and filters by it.

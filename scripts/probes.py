@@ -1,4 +1,5 @@
-"""Acceptance probes P1-P5 against a running system (docs/brief.md#acceptance-probes).
+"""Acceptance probes P1-P5, plus stretch probe A1, against a running system.
+Spec: docs/brief.md#acceptance-probes (A1: docs/background-jobs.md#usage-alerts).
 
 Run inside the api container, which has DB access to create fresh probe tenants:
     docker compose exec api python scripts/probes.py [--only P1,P2]
@@ -215,12 +216,45 @@ def probe_p5(client: httpx.Client) -> str:
     )
 
 
+def alerts_for(client: httpx.Client, api_key: str) -> list[dict]:
+    return client.get("/alerts", headers={"X-API-Key": api_key}).json()["alerts"]
+
+
+def probe_a1(client: httpx.Client) -> str:
+    """Stretch: 80% and 100% alerts fire exactly once each and the worker delivers them."""
+    api_key = fresh_tenant("free")
+    for i in range(1, 800):
+        r = generate(client, api_key, f"a1-{i}")
+        check(r.status_code == 200, f"request {i}: {r.status_code}")
+    check(alerts_for(client, api_key) == [], "an alert fired before 80%")
+    at_80 = generate(client, api_key, "a1-800").json()["alerts_triggered"]
+    check(at_80 == [{"metric": "api_calls", "threshold_percent": 80}], f"#800: {at_80}")
+    for i in range(801, 1000):
+        r = generate(client, api_key, f"a1-{i}")
+        check(r.json()["alerts_triggered"] == [], f"request {i} re-fired an alert")
+    at_100 = generate(client, api_key, "a1-1000").json()["alerts_triggered"]
+    check(at_100 == [{"metric": "api_calls", "threshold_percent": 100}], f"#1000: {at_100}")
+    over = generate(client, api_key, "a1-1001")
+    check(over.status_code == 402, f"#1001: {over.status_code}")
+    sent = wait_for(
+        lambda: [a["status"] for a in alerts_for(client, api_key)] == ["sent", "sent"], 15
+    )
+    found = alerts_for(client, api_key)
+    check(sent, f"worker did not deliver both alerts: {found}")
+    return (
+        "#799 -> no alert; #800 -> 80% alert; #801-#999 -> none; #1000 -> 100% alert; "
+        f"#1001 -> 402; worker delivered {len(found)} of {len(found)} "
+        f"(used at trigger {[a['used'] for a in found]})"
+    )
+
+
 PROBES: dict[str, Callable[[httpx.Client], str]] = {
     "P1": probe_p1,
     "P2": probe_p2,
     "P3": probe_p3,
     "P4": probe_p4,
     "P5": probe_p5,
+    "A1": probe_a1,  # stretch goal: usage alerts
 }
 INTERACTIVE = {"P3"}
 NOT_YET: dict[str, str] = {}

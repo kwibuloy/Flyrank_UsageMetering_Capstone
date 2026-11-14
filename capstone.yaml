@@ -34,6 +34,10 @@ endpoints:
     path: /usage
     auth: X-API-Key
     description: Current month's usage, limits, remaining and cost rollup in micro-USD.
+  - method: GET
+    path: /alerts
+    auth: X-API-Key
+    description: Current month's 80% / 100% usage alerts (stretch goal) and their delivery status.
   - method: POST
     path: /billing/checkout
     auth: X-API-Key

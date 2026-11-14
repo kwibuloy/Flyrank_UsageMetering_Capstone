@@ -13,7 +13,7 @@ The source of truth for *how this system works and why*.
 | [quotas.md](quotas.md) | Limits, the boundary rule, 429 vs 402, billing periods |
 | [pricing.md](pricing.md) | Cost math, token rules, pricing constants, rounding |
 | [stripe.md](stripe.md) | Checkout, webhooks, signature verification, Stripe CLI |
-| [background-jobs.md](background-jobs.md) | The worker, job queue, retries, failure alerts |
+| [background-jobs.md](background-jobs.md) | The worker, job queues, retries, failure alerts, 80%/100% usage alerts |
 | [conventions.md](conventions.md) | Code style, money types, validation, logging, testing |
 | [workflow.md](workflow.md) | Phases and gates, commits, EVIDENCE.md / BUILDLOG.md discipline |
 | [adr/](adr/) | Why a decision was made (one file per decision) |

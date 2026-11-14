@@ -20,13 +20,15 @@ app/
     billing.py            Stripe Checkout session creation
     webhooks.py           verify signature, store/dedupe stripe_events
     usage_report.py       GET /usage: rollup + cost
+    alerts.py             80%/100% threshold crossing (pure) + enqueue in the metering txn
+    alert_delivery.py     signed webhook or log sink for usage alerts
     stripe_sync.py        apply a verified Stripe event to tenant/subscription
     periods.py            billing-period boundaries (UTC calendar month)
-  repositories/           tenants.py, plans.py, usage.py, idempotency.py, subscriptions.py, stripe_events.py
+  repositories/           alerts.py, tenants.py, plans.py, usage.py, idempotency.py, subscriptions.py, stripe_events.py
   db/
     base.py, models.py, session.py
   jobs/
-    worker.py             polling loop; claims jobs with FOR UPDATE SKIP LOCKED
+    worker.py             polling loop over two queues (stripe_events, usage_alerts); FOR UPDATE SKIP LOCKED
 config/
   pricing.toml            pinned pricing constants (versioned)
 migrations/               Alembic

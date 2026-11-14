@@ -145,3 +145,24 @@ One pasted proof per requirement (test name + output, curl transcript, or log li
   - **How:** `docker compose exec api python scripts/probes.py` · **Date:** 2026-11-14
   - **Output:** `P5 PASS  E1 34,250 + E2 10,500 + E3 3,000 µ$ per request; /usage total 47,750 µ$ ($0.05) lines {'api_calls': 1500, 'input_tokens': 7500, 'cached_input_tokens': 3750, 'output_tokens': 35000}`
   - Same run: `P1 PASS`, `P2 PASS`, `P4 PASS` (P3 is interactive; its PASS is recorded above).
+
+## Stretch: usage alerts at 80% / 100%
+- [x] **A1** Exactly one alert per threshold per period, queued atomically with the usage, delivered by the background job with retries.
+  - **How:** `docker compose exec api python scripts/probes.py` (probe A1, live stack); `pytest tests/unit/test_alerts.py tests/integration/test_alerts.py`; a real HTTP round trip of the signed webhook.
+  - **Date:** 2026-11-14
+  - **Output:**
+    ```
+    A1 PASS  #799 -> no alert; #800 -> 80% alert; #801-#999 -> none; #1000 -> 100% alert; #1001 -> 402; worker delivered 2 of 2 (used at trigger [800, 1000])
+
+    # worker log (no ALERT_WEBHOOK_URL set -> log sink)
+    WARNING app.alerts USAGE_ALERT alert_id=6 tenant=probe-free-621de4ef metric=api_calls threshold=100% probe-free-621de4ef has used all of its monthly API call quota (1,000 of 1,000). Requests are blocked until the next month. ...
+    INFO app.jobs.worker usage_alert_sent id=6 via=log
+
+    # real HTTP delivery to a local receiver that verifies the HMAC signature
+    deliver() -> webhook 204
+    receiver: signature valid = True | text = acme has used 80% of its monthly API call quota (800 of 1,000) on the Free plan.
+
+    # tests
+    25 passed (alert tests) · full suite 159 passed
+    ```
+  - **Why this proves it:** thresholds fire exactly at 800 and 1,000 calls and never again; 20 concurrent requests crossing 80% together create exactly one alert; replays and rejected requests create none; an upgrade re-arms the thresholds; failed deliveries retry with backoff and go `dead` with an `ALERT usage_alert_dead` log after 5 attempts; tenants only see their own alerts. Design: docs/adr/0005-usage-alerts.md.
