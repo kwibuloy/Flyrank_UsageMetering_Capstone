@@ -15,7 +15,9 @@ For a given `(tenant, Idempotency-Key)`: at most one set of usage events exists,
 4. Lock counters: `SELECT … FROM usage_counters WHERE tenant_id=… AND period_start=… AND metric IN (…) ORDER BY metric FOR UPDATE` (upsert missing rows first; fixed lock order prevents deadlocks).
 5. `quota.decide(...)` (pure). Rejected → write the error response onto the idempotency row, commit, return it.
 6. Insert `usage_events` rows; `UPDATE usage_counters SET used = used + qty`.
-7. Write the 200 response onto the idempotency row. Commit.
+7. Write the 200 response onto the idempotency row. The route commits, then responds.
+
+Code: `app/services/metering.py::record_usage`, `app/repositories/idempotency.py`, `app/repositories/usage.py::lock_counters`.
 
 Defence in depth: `usage_events` unique `(tenant_id, idempotency_key, metric)`.
 

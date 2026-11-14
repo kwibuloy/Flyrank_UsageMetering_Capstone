@@ -24,7 +24,7 @@ Body (simulated usage):
 Validation: all ints ≥ 0; `cached_input_tokens <= input_tokens`; total tokens ≤ 1,000,000 per request.
 | Status | When |
 |---|---|
-| 200 | Accepted and metered. Body: `{request_id, metered: {api_calls: 1, ai_tokens: N}, cost_microusd, usage: {…}}` |
+| 200 | Accepted and metered. Body: `{request_id, idempotency_key, metered: {api_calls: 1, ai_tokens: N}, usage: {metric: {used, limit, remaining}}, period: {start, end}}` (`cost_microusd` added in Phase 4) |
 | 200 (replay) | Same key + same body → stored body verbatim, header `Idempotent-Replayed: true` |
 | 402 `payment_required` | Free plan quota exhausted (upgrade) or subscription `past_due`/`unpaid` |
 | 429 `quota_exceeded` | Pro quota exhausted; `Retry-After` = seconds to period end |
@@ -34,6 +34,7 @@ Rejections are also stored under the idempotency key, so a retried rejected requ
 Quota error `details`: `{metric, used, limit, requested, period_end, plan, upgrade_url?}`. Rules: [quotas.md](quotas.md).
 
 ### GET /usage
+`used` is the SUM of this period's `usage_events` (the rollup); `usage_counters` are only for locking, and tests assert both agree. `cost` is added in Phase 4.
 ```json
 {
   "tenant": "acme", "plan": "free", "subscription_status": null,

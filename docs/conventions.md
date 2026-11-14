@@ -17,7 +17,9 @@
 - Tenant API keys stored as SHA-256 hashes only.
 
 ## Transactions
-- One request = one session = one transaction, opened in `api/deps.py`. Services do not commit; the dependency commits or rolls back. Exception: `MeterService.record` must persist rejection responses — it commits via the same session before returning.
+- One request = one session = one transaction, opened in `api/deps.py`. Services never commit.
+- The **route** calls `db.commit()` right before returning, so a response is never sent for work that was not committed. The dependency only rolls back and closes (anything uncommitted is discarded).
+- Quota rejections are a normal return value (not an exception), so the stored rejection on the idempotency row is committed like any other response.
 
 ## Testing
 - `pytest`; unit tests have no DB; integration tests use the compose Postgres (`TEST_DATABASE_URL`), schema via `alembic upgrade head`, each test in a rolled-back transaction or truncated tables.
