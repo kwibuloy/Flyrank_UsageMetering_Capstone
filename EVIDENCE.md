@@ -199,4 +199,13 @@ One pasted proof per requirement (test name + output, curl transcript, or log li
     WEB_CONCURRENCY=8  statuses={200: 5000}  throughput=227 req/s  p50=198ms  p95=393ms   usage_events=5000 counters_mismatched=0  CORRECT
     ```
   - **Why this proves it:** 15,000 requests across 300 tenants with zero errors, zero lost or double-counted events, and counters equal to event sums for every tenant; one process was the bottleneck (profiling: Postgres round trips), and 4 processes (the default, 50 of 100 Postgres connections) gave 2.9x the throughput. Docker Desktop on Windows, 16 vCPU, load generator in the same container.
-- [ ] **CI1** GitHub Actions: lint, tests (Postgres 16, migration checks), README flow + probes in Docker. *Recorded after the first push.*
+- [x] **CI1** GitHub Actions: lint, tests (Postgres 16, migration checks), README flow + probes in Docker.
+  - **How:** every push to `main` (`.github/workflows/ci.yml`); run https://github.com/kwibuloy/Flyrank_UsageMetering_Capstone/actions/runs/43608375184
+  - **Date:** 2026-11-14
+  - **Output:**
+    ```
+    ✓ Lint in 16s                                    ruff: All checks passed!
+    ✓ Tests (Postgres 16) in 36s                     185 passed, 1 warning in 8.59s · alembic check: No new upgrade operations detected · downgrade base + upgrade head OK
+    ✓ README flow + acceptance probes (Docker) 1m0s  {"status":"ok","db":"ok"} · P1 PASS · P2 PASS · P4 PASS · P5 PASS · A1 PASS (P3, B1 need a browser)
+    ```
+  - **Why this proves it:** a clean runner builds the stack from the README's commands only and passes the acceptance probes, on every push. The first run failed at `alembic check` (the CLI could not import `app` outside Docker); fixed with `prepend_sys_path` in `alembic.ini` (BUILDLOG).
