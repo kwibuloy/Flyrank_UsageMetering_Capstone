@@ -1,0 +1,21 @@
+# secrets — must be first
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# local
+*.log
+.DS_Store
+Thumbs.db
