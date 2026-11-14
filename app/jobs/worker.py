@@ -1,4 +1,4 @@
-"""Background worker: applies queued Stripe events and delivers usage alerts.
+"""Background worker: Stripe events, usage alerts and Stripe usage reports (three queues).
 
 Both queues retry with exponential backoff; after MAX_ATTEMPTS a job is marked dead and an
 ALERT is logged. Spec: docs/background-jobs.md. Run: python -m app.jobs.worker
@@ -8,6 +8,7 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -15,7 +16,8 @@ from app.config import get_settings
 from app.db.session import SessionLocal
 from app.repositories import alerts as alerts_repo
 from app.repositories import stripe_events as events_repo
-from app.services import alert_delivery, alerts, billing, stripe_sync
+from app.repositories import usage_reports as reports_repo
+from app.services import alert_delivery, alerts, billing, stripe_sync, usage_billing
 
 logger = logging.getLogger("app.jobs.worker")
 
@@ -135,6 +137,56 @@ def run_alerts_once(
     return "retry"
 
 
+def run_usage_reports_once(
+    session_factory: Callable[[], Session] = SessionLocal,
+    send: Callable[[Any], None] | None = None,
+    now: datetime | None = None,
+) -> str | None:
+    """Send at most one usage report to Stripe. Returns "sent", "retry", "dead" or None.
+
+    Safe to retry: Stripe de-duplicates on the report's identifier.
+    """
+    send_report = send or usage_billing.send
+    now = now or datetime.now(UTC)
+
+    with session_factory() as session:
+        report = reports_repo.claim_next(session, now)
+        if report is None:
+            return None
+        report_id, attempts = report.id, report.attempts
+        try:
+            send_report(report)
+            reports_repo.mark_sent(session, report_id)
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            error = f"{type(exc).__name__}: {exc}"[:500]
+        else:
+            logger.info("usage_report_sent id=%s", report_id)
+            return "sent"
+
+    attempts += 1
+    dead = attempts >= MAX_ATTEMPTS
+    with session_factory() as session:
+        reports_repo.record_failure(
+            session,
+            report_id,
+            attempts=attempts,
+            error=error,
+            next_attempt_at=now + timedelta(seconds=backoff_seconds(attempts)),
+            dead=dead,
+        )
+        session.commit()
+
+    if dead:
+        logger.error(
+            "ALERT usage_report_dead id=%s attempts=%s error=%s", report_id, attempts, error
+        )
+        return "dead"
+    logger.warning("usage_report_retry id=%s attempts=%s error=%s", report_id, attempts, error)
+    return "retry"
+
+
 def main() -> None:
     settings = get_settings()
     logging.basicConfig(
@@ -143,9 +195,8 @@ def main() -> None:
     logger.info("worker started poll=%ss", settings.worker_poll_seconds)
     while True:
         try:
-            stripe_result = run_once()
-            alert_result = run_alerts_once()
-            if stripe_result is None and alert_result is None:
+            results = (run_once(), run_alerts_once(), run_usage_reports_once())
+            if all(result is None for result in results):
                 time.sleep(settings.worker_poll_seconds)
         except KeyboardInterrupt:
             logger.info("worker stopped")

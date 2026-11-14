@@ -6,13 +6,14 @@ can never both "cross" the same threshold; the unique constraint is the backstop
 """
 
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.repositories import alerts as alerts_repo
 from app.services.metrics import CHECK_ORDER, LABELS
+from app.services.periods import period_bounds
 
 THRESHOLDS = (80, 100)
 
@@ -109,3 +110,12 @@ def to_json(alert: Any) -> dict[str, Any]:
         "triggered_at": alert.created_at.isoformat().replace("+00:00", "Z"),
         "sent_at": alert.sent_at.isoformat().replace("+00:00", "Z") if alert.sent_at else None,
     }
+
+
+def current_period(
+    session: Session, tenant_id: uuid.UUID, now: datetime | None = None
+) -> tuple[datetime, datetime, list[dict[str, Any]]]:
+    """This tenant's alerts for the current billing period, tenant-facing JSON."""
+    start, end = period_bounds(now or datetime.now(UTC))
+    rows = alerts_repo.list_for_period(session, tenant_id, start.date())
+    return start, end, [to_json(row) for row in rows]

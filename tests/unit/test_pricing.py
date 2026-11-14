@@ -173,3 +173,22 @@ def test_missing_key_is_rejected():
     del raw["ai_tokens"]["output_per_million_microusd"]
     with pytest.raises(pricing.PricingConfigError):
         pricing.parse_price_book(raw)
+
+
+def test_exact_picousd_is_the_unrounded_numerator():
+    e1 = TokenUsage(input=10_000, cached=4_000, output=2_000, reasoning=500)
+    assert pricing.exact_picousd(0, e1, PRICES) == 33_750_000_000
+    assert pricing.exact_picousd(1, e1, PRICES) == 33_750_000_000 + 500_000_000
+    # 1 fresh input token = 1.25 µ$: exact, where µ$ would have to round.
+    assert pricing.exact_picousd(0, TokenUsage(input=1), PRICES) == 1_250_000
+
+
+def test_rounding_exact_picousd_once_equals_the_quote_total():
+    """Stripe sums the exact values and rounds once, so it agrees with /usage."""
+    values = (0, 1, 3, 999, 1_000_001)
+    for calls, inp, cached, out, reasoning in itertools.product(values, repeat=5):
+        if cached > inp:
+            continue
+        tokens = TokenUsage(inp, cached, out, reasoning)
+        exact = pricing.exact_picousd(calls, tokens, PRICES)
+        assert half_up_div(exact, 1_000_000) == quote(calls, tokens, PRICES).total_microusd

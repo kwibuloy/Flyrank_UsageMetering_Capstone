@@ -248,6 +248,103 @@ def probe_a1(client: httpx.Client) -> str:
     )
 
 
+def probe_b1(client: httpx.Client) -> str:
+    """Optional feature: Pro usage reaches the Stripe invoice, matching /usage to the cent.
+
+    Interactive like P3 (pay in a browser). Needs scripts/stripe_setup_metering.py run once.
+    """
+    from app.services import usage_billing
+
+    api_key = fresh_tenant("free")
+    r = client.post("/billing/checkout", headers={"X-API-Key": api_key})
+    check(r.status_code == 200, f"checkout: {r.status_code} {r.text}")
+    print("    Open and pay with 4242 4242 4242 4242:", flush=True)
+    print(f"    {r.json()['checkout_url']}", flush=True)
+    check(
+        wait_for(lambda: usage(client, api_key)["usage_billing"]["enabled"], seconds=900),
+        "tenant not on a metered Pro subscription after 15 minutes",
+    )
+    requests = [
+        {
+            "input_tokens": 10_000,
+            "cached_input_tokens": 4_000,
+            "output_tokens": 2_000,
+            "reasoning_tokens": 500,
+        },
+        {"reasoning_tokens": 1_000},
+        {"input_tokens": 8_000, "cached_input_tokens": 8_000},
+    ] + [{"output_tokens": 1_000_000}] * 4
+    for i, body in enumerate(requests, start=1):
+        g = generate(client, api_key, f"b1-{i}", body)
+        check(g.status_code == 200, f"request {i}: {g.status_code} {g.text}")
+    check(
+        wait_for(lambda: usage(client, api_key)["usage_billing"]["reports_sent"] == 7, 60),
+        f"worker did not send 7 reports: {usage(client, api_key)['usage_billing']}",
+    )
+    after = usage(client, api_key)
+    expected_micro = after["cost"]["total_microusd"]
+    check(after["usage_billing"]["reported_microusd"] == expected_micro, "reported != /usage")
+    expected_cents = pricing_cents(expected_micro)
+
+    with SessionLocal() as session:
+        tenant = tenancy.authenticate(session, api_key)
+    cents = wait_for_invoice_usage(tenant.id, expected_cents)
+    ident = usage_billing.identifier(tenant.id, "b1-1")
+    return (
+        f"7 Pro requests -> 7 meter events (identifier {ident[:14]}...); "
+        f"/usage {expected_micro:,} µ$ ({after['cost']['total_display']}) == Stripe upcoming "
+        f"invoice usage line {cents} cents"
+    )
+
+
+def invoice_usage_cents(tenant_id) -> int | None:
+    """The usage line on the tenant's upcoming Stripe invoice, in cents (None = not yet)."""
+    import stripe
+
+    from app.services import billing
+
+    with SessionLocal() as session:
+        customer, subscription = session.execute(
+            text(
+                "SELECT t.stripe_customer_id, s.stripe_subscription_id FROM tenants t "
+                "JOIN subscriptions s ON s.tenant_id = t.id WHERE t.id = :t"
+            ),
+            {"t": tenant_id},
+        ).one()
+    key = billing.secret_key()
+    usage_price = billing.usage_price_id(key)
+    preview = stripe.Invoice.create_preview(
+        api_key=key, customer=customer, subscription=subscription
+    )
+    for item in preview.lines.auto_paging_iter():
+        line = item.to_dict()
+        details = (line.get("pricing") or {}).get("price_details") or {}
+        price = details.get("price") or (line.get("price") or {}).get("id")
+        if price == usage_price and line.get("amount"):
+            return line["amount"]
+    return None
+
+
+def wait_for_invoice_usage(tenant_id, expected_cents: int, seconds: int = 600) -> int | None:
+    """Poll the invoice preview every 10 s; Stripe aggregates meter events asynchronously."""
+    print("    Waiting for Stripe to aggregate the meter (can take a few minutes)...", flush=True)
+    deadline = time.monotonic() + seconds
+    cents = None
+    while time.monotonic() < deadline:
+        cents = invoice_usage_cents(tenant_id)
+        if cents == expected_cents:
+            return cents
+        time.sleep(10)
+    check(False, f"invoice usage line {cents} cents != expected {expected_cents} cents")
+    return cents
+
+
+def pricing_cents(microusd: int) -> int:
+    from app.services.pricing import half_up_div
+
+    return half_up_div(microusd, 10_000)
+
+
 PROBES: dict[str, Callable[[httpx.Client], str]] = {
     "P1": probe_p1,
     "P2": probe_p2,
@@ -255,8 +352,9 @@ PROBES: dict[str, Callable[[httpx.Client], str]] = {
     "P4": probe_p4,
     "P5": probe_p5,
     "A1": probe_a1,  # stretch goal: usage alerts
+    "B1": probe_b1,  # optional: usage on the Stripe invoice (interactive)
 }
-INTERACTIVE = {"P3"}
+INTERACTIVE = {"P3", "B1"}
 NOT_YET: dict[str, str] = {}
 
 

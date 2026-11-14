@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import stripe
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
@@ -17,7 +18,7 @@ from sqlalchemy import text
 
 from app.db.session import SessionLocal, engine
 from app.main import create_app
-from app.services import tenancy
+from app.services import billing, tenancy
 from app.services.periods import period_bounds
 from app.services.tenancy import TenantContext
 
@@ -40,10 +41,37 @@ def clean_db(migrated: None) -> Iterator[None]:
         conn.execute(
             text(
                 "TRUNCATE usage_events, usage_counters, idempotency_keys, subscriptions, "
-                "stripe_events, usage_alerts, tenants RESTART IDENTITY CASCADE"
+                "stripe_events, usage_alerts, usage_reports, tenants RESTART IDENTITY CASCADE"
             )
         )
     yield
+
+
+@pytest.fixture(autouse=True)
+def no_stripe_price_lookup(monkeypatch) -> Iterator[list]:
+    """Tests never reach Stripe: the usage-price lookup returns "not set up" unless a test
+    appends a fake price to the returned list."""
+    found: list = []
+    billing._usage_price_cache.clear()
+    monkeypatch.setattr(
+        stripe.Price, "list", lambda **kwargs: type("L", (), {"data": list(found)})()
+    )
+    yield found
+    billing._usage_price_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def no_stripe_reads(monkeypatch) -> None:
+    """Success/cancel pages read the Checkout Session and account name from Stripe; in tests
+    those calls fail like an outage unless a test replaces them."""
+
+    def offline(*args, **kwargs):
+        raise stripe.APIConnectionError("tests never reach Stripe")
+
+    billing._merchant_cache.clear()
+    billing._session_tenants.clear()
+    monkeypatch.setattr(stripe.checkout.Session, "retrieve", offline)
+    monkeypatch.setattr(stripe.Account, "retrieve", offline)
 
 
 @pytest.fixture

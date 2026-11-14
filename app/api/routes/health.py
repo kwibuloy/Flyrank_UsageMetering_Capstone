@@ -2,15 +2,13 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from app.api.deps import DbSession
-from app.repositories import health as health_repo
+from app.services import health
 
 router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-def health(db: DbSession) -> JSONResponse:
-    try:
-        health_repo.ping(db)
-    except Exception:
+def get_health(db: DbSession) -> JSONResponse:
+    if not health.database_ok(db):
         return JSONResponse({"status": "degraded", "db": "unavailable"}, status_code=503)
     return JSONResponse({"status": "ok", "db": "ok"})

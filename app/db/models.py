@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -159,6 +160,10 @@ class Subscription(Base):
     last_event_created: Mapped[int] = mapped_column(
         BigInteger, nullable=False, server_default=text("0")
     )
+    # True when the subscription has a metered (usage) price, so usage is reported to Stripe.
+    usage_billing: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -234,4 +239,40 @@ class UsageAlert(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UsageReport(Base):
+    """Outbox of usage to report to a Stripe Billing Meter, one row per accepted request.
+
+    Inserted in the metering transaction; sent by the worker. `identifier` is passed to
+    Stripe, which de-duplicates on it, so retries never double-bill.
+    Spec: docs/stripe.md#usage-based-billing-metered.
+    """
+
+    __tablename__ = "usage_reports"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_usage_reports_tenant_key"),
+        UniqueConstraint("identifier", name="uq_usage_reports_identifier"),
+        CheckConstraint("value_picousd > 0", name="value_positive"),
+        CheckConstraint("status IN ('pending', 'sent', 'dead')", name="status_known"),
+        Index("ix_usage_reports_status_next_attempt_at", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    stripe_customer_id: Mapped[str] = mapped_column(Text, nullable=False)
+    identifier: Mapped[str] = mapped_column(Text, nullable=False)
+    # Exact cost in pico-USD (1e-12 USD): the integer numerator before rounding.
+    value_picousd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

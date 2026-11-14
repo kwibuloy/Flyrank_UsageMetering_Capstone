@@ -142,6 +142,18 @@ def quote(api_calls: int, tokens: TokenUsage, prices: PriceBook) -> Cost:
     )
 
 
+def exact_picousd(api_calls: int, tokens: TokenUsage, prices: PriceBook) -> int:
+    """Unrounded cost in pico-USD (1e-12 USD): the integer numerators `quote` divides once.
+
+    Reported to Stripe's usage meter, so the invoice sums exact values and rounds once,
+    like GET /usage: half_up_div(exact_picousd(...), 1_000_000) == quote(...).total_microusd.
+    """
+    if not _is_int(api_calls) or api_calls < 0:
+        raise ValueError("api_calls must be a non-negative int")
+    calls = api_calls * prices.per_call * TOKENS_PER_PRICE_UNIT
+    return calls + sum(token_numerators(tokens, prices).values())
+
+
 def parse_price_book(raw: dict[str, Any]) -> PriceBook:
     try:
         version = raw["version"]

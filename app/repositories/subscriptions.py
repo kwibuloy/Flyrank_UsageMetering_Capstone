@@ -22,6 +22,7 @@ def upsert(
     status: str,
     current_period_end: datetime | None,
     event_created: int,
+    usage_billing: bool = False,
 ) -> None:
     stmt = pg_insert(Subscription).values(
         id=uuid.uuid4(),
@@ -30,6 +31,7 @@ def upsert(
         status=status,
         current_period_end=current_period_end,
         last_event_created=event_created,
+        usage_billing=usage_billing,
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=[Subscription.tenant_id],
@@ -37,6 +39,7 @@ def upsert(
             "stripe_subscription_id": stmt.excluded.stripe_subscription_id,
             "status": stmt.excluded.status,
             "current_period_end": stmt.excluded.current_period_end,
+            "usage_billing": stmt.excluded.usage_billing,
             "last_event_created": func.greatest(
                 Subscription.last_event_created, stmt.excluded.last_event_created
             ),

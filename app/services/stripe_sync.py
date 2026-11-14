@@ -83,9 +83,19 @@ def _apply_subscription(
         status=status,
         current_period_end=_period_end(subscription),
         event_created=created,
+        usage_billing=has_metered_item(subscription),
     )
     tenants_repo.set_plan(session, tenant_id, plan_id)
     return f"plan={plan_id} status={status}"
+
+
+def has_metered_item(subscription: dict[str, Any]) -> bool:
+    """True if any subscription item uses a metered (usage-based) recurring price."""
+    for item in (subscription.get("items") or {}).get("data") or []:
+        recurring = ((item.get("price") or {}).get("recurring")) or {}
+        if recurring.get("usage_type") == "metered":
+            return True
+    return False
 
 
 def _resolve_tenant(session: Session, subscription: dict[str, Any]) -> uuid.UUID:
