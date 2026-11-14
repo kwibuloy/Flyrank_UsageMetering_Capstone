@@ -7,12 +7,18 @@ Each probe prints PASS/FAIL with the evidence it saw; exit code 1 if any probe f
 """
 
 import argparse
+import hashlib
+import hmac
+import json
 import sys
+import time
 import uuid
 from collections.abc import Callable
 
 import httpx
+from sqlalchemy import text
 
+from app.config import get_settings
 from app.db.session import SessionLocal
 from app.services import tenancy
 
@@ -83,8 +89,109 @@ def probe_p2(client: httpx.Client) -> str:
     return f"#1000 -> 200, #1001 -> 402 '{error['message']}'; tokens 100,000 -> 200, +1 -> 402"
 
 
-PROBES: dict[str, Callable[[httpx.Client], str]] = {"P1": probe_p1, "P2": probe_p2}
-NOT_YET = {"P3": "Phase 3 (Stripe checkout)", "P4": "Phase 3 (webhooks)", "P5": "Phase 4 (pricing)"}
+def stripe_event_row(event_id: str) -> dict | None:
+    with SessionLocal() as session:
+        row = (
+            session.execute(
+                text("SELECT status, attempts, outcome FROM stripe_events WHERE id = :i"),
+                {"i": event_id},
+            )
+            .mappings()
+            .first()
+        )
+    return dict(row) if row else None
+
+
+def stripe_event_count() -> int:
+    with SessionLocal() as session:
+        return session.execute(text("SELECT count(*) FROM stripe_events")).scalar_one()
+
+
+def signed_post(client: httpx.Client, event: dict, secret: str) -> httpx.Response:
+    payload = json.dumps(event).encode()
+    ts = int(time.time())
+    digest = hmac.new(secret.encode(), f"{ts}.".encode() + payload, hashlib.sha256).hexdigest()
+    return client.post(
+        "/webhooks/stripe",
+        content=payload,
+        headers={"Stripe-Signature": f"t={ts},v1={digest}", "Content-Type": "application/json"},
+    )
+
+
+def wait_for(predicate: Callable[[], bool], seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.5)
+    return predicate()
+
+
+def probe_p3(client: httpx.Client) -> str:
+    """Real test-mode Checkout: you pay with 4242 4242 4242 4242 in a browser."""
+    api_key = fresh_tenant("free")
+    r = client.post("/billing/checkout", headers={"X-API-Key": api_key})
+    check(r.status_code == 200, f"checkout: {r.status_code} {r.text}")
+    print(f"    Open and pay with 4242 4242 4242 4242:\n    {r.json()['checkout_url']}", flush=True)
+    upgraded = wait_for(lambda: usage(client, api_key)["plan"] == "pro", seconds=900)
+    check(upgraded, "tenant still on Free after 15 minutes (is the stripe listener running?)")
+    after = usage(client, api_key)
+    limits = {m: v["limit"] for m, v in after["metrics"].items()}
+    return f"Free -> {after['plan']} ({after['subscription_status']}) via webhook; limits {limits}"
+
+
+def probe_p4(client: httpx.Client) -> str:
+    """Forged webhook -> 400 + no change; a signed event sent twice -> processed once."""
+    secret = get_settings().stripe_webhook_secret.get_secret_value()
+    check(bool(secret), "STRIPE_WEBHOOK_SECRET is not set")
+    api_key = fresh_tenant("free")
+    with SessionLocal() as session:
+        tenant_id = tenancy.authenticate(session, api_key).id
+
+    before = stripe_event_count()
+    forged = signed_post(client, {"id": "evt_forged", "type": "x"}, secret="whsec_wrong")
+    check(forged.status_code == 400, f"forged: {forged.status_code}, expected 400")
+    check(stripe_event_count() == before, "forged webhook was stored")
+
+    event = {
+        "id": f"evt_probe_{uuid.uuid4().hex[:16]}",
+        "object": "event",
+        "type": "customer.subscription.updated",
+        "created": int(time.time()),
+        "livemode": False,
+        "data": {
+            "object": {
+                "id": f"sub_probe_{uuid.uuid4().hex[:12]}",
+                "object": "subscription",
+                "status": "active",
+                "customer": None,
+                "metadata": {"tenant_id": str(tenant_id)},
+            }
+        },
+    }
+    first = signed_post(client, event, secret)
+    second = signed_post(client, event, secret)
+    check(first.json() == {"status": "queued"}, f"first delivery: {first.text}")
+    check(second.json() == {"status": "duplicate"}, f"replay: {second.text}")
+    processed = wait_for(lambda: (stripe_event_row(event["id"]) or {}).get("status") == "done", 15)
+    check(processed, f"worker did not process the event: {stripe_event_row(event['id'])}")
+    row = stripe_event_row(event["id"])
+    check(row["attempts"] == 1, f"attempts = {row['attempts']}, expected 1")
+    check(usage(client, api_key)["plan"] == "pro", "plan did not change")
+    return (
+        f"forged -> 400, 0 rows stored; replay -> queued then duplicate; "
+        f"worker applied once (attempts={row['attempts']}, outcome '{row['outcome']}')"
+    )
+
+
+PROBES: dict[str, Callable[[httpx.Client], str]] = {
+    "P1": probe_p1,
+    "P2": probe_p2,
+    "P3": probe_p3,
+    "P4": probe_p4,
+}
+INTERACTIVE = {"P3"}
+NOT_YET = {"P5": "Phase 4 (pricing)"}
 
 
 def main() -> int:
@@ -92,16 +199,17 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://localhost:8000")
     parser.add_argument("--only", default="", help="comma-separated, e.g. P1,P2")
     args = parser.parse_args()
-    selected = [p.strip().upper() for p in args.only.split(",") if p.strip()] or [
-        *PROBES,
-        *NOT_YET,
-    ]
+    chosen = [p.strip().upper() for p in args.only.split(",") if p.strip()]
+    selected = chosen or [*PROBES, *NOT_YET]
 
     failed = False
     with httpx.Client(base_url=args.base_url, timeout=10) as client:
         for name in selected:
             if name in NOT_YET:
                 print(f"{name} SKIP  not built yet: {NOT_YET[name]}")
+                continue
+            if name in INTERACTIVE and not chosen:
+                print(f"{name} SKIP  needs a browser: run with --only {name}")
                 continue
             try:
                 print(f"{name} PASS  {PROBES[name](client)}")
