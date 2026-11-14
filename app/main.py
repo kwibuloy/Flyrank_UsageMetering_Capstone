@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 
 from app.api.errors import register_error_handlers
-from app.api.routes import billing, generate, health, usage, webhooks
+from app.api.routes import alerts, billing, generate, health, usage, webhooks
 from app.config import get_settings
 from app.services.pricing import get_price_book
 
@@ -23,6 +23,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(generate.router)
     app.include_router(usage.router)
+    app.include_router(alerts.router)
     app.include_router(billing.router)
     app.include_router(webhooks.router)
     return app

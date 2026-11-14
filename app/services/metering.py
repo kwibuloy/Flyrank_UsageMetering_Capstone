@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.repositories import idempotency as idempotency_repo
 from app.repositories import usage as usage_repo
-from app.services import pricing, quota
+from app.services import alerts, pricing, quota
 from app.services.errors import IdempotencyKeyReuse
 from app.services.metrics import AI_TOKENS, API_CALLS, METRICS
 from app.services.periods import period_bounds
@@ -119,6 +119,17 @@ def record_usage(
     usage_repo.add_to_counters(session, tenant.id, period_start, requested)
 
     used_after = {m: used.get(m, 0) + requested.get(m, 0) for m in METRICS}
+    # Same transaction, counters still locked: an alert exists iff the usage that
+    # crossed the threshold was committed (docs/background-jobs.md#usage-alerts).
+    triggered = alerts.enqueue_crossed(
+        session,
+        tenant_id=tenant.id,
+        plan_id=tenant.plan_id,
+        period_start=period_start,
+        limits=tenant.limits,
+        used_before=used,
+        used_after=used_after,
+    )
     body = {
         "request_id": str(uuid.uuid4()),
         "idempotency_key": idempotency_key,
@@ -128,6 +139,7 @@ def record_usage(
         ).to_json(),
         "usage": metrics_snapshot(tenant.limits, used_after),
         "period": period_json(start, end),
+        "alerts_triggered": [{"metric": m, "threshold_percent": p} for m, p in triggered],
     }
     idempotency_repo.save_response(session, tenant.id, idempotency_key, 200, body)
     return MeterResult(200, body, replayed=False)
