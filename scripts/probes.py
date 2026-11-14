@@ -184,14 +184,46 @@ def probe_p4(client: httpx.Client) -> str:
     )
 
 
+def probe_p5(client: httpx.Client) -> str:
+    """Pinned prices -> exact totals for cached input and reasoning; /usage matches."""
+    api_key = fresh_tenant("free")
+    requests = [  # docs/pricing.md worked examples E1-E3, each + one $0.0005 API call
+        (
+            {
+                "input_tokens": 10_000,
+                "cached_input_tokens": 4_000,
+                "output_tokens": 2_000,
+                "reasoning_tokens": 500,
+            },
+            34_250,
+        ),
+        ({"reasoning_tokens": 1_000}, 10_500),
+        ({"input_tokens": 8_000, "cached_input_tokens": 8_000}, 3_000),
+    ]
+    for i, (body, expected) in enumerate(requests, start=1):
+        r = generate(client, api_key, f"p5-{i}", body)
+        check(r.status_code == 200, f"request {i}: {r.status_code} {r.text}")
+        got = r.json()["cost"]["total_microusd"]
+        check(got == expected, f"request {i}: cost {got} µ$, expected {expected}")
+    cost = usage(client, api_key)["cost"]
+    check(cost["total_microusd"] == 47_750, f"/usage total {cost['total_microusd']} µ$")
+    check(cost["total_display"] == "$0.05", f"/usage display {cost['total_display']}")
+    lines = {k: v["amount_microusd"] for k, v in cost["lines"].items()}
+    return (
+        f"E1 34,250 + E2 10,500 + E3 3,000 µ$ per request; /usage total "
+        f"{cost['total_microusd']:,} µ$ ({cost['total_display']}) lines {lines}"
+    )
+
+
 PROBES: dict[str, Callable[[httpx.Client], str]] = {
     "P1": probe_p1,
     "P2": probe_p2,
     "P3": probe_p3,
     "P4": probe_p4,
+    "P5": probe_p5,
 }
 INTERACTIVE = {"P3"}
-NOT_YET = {"P5": "Phase 4 (pricing)"}
+NOT_YET: dict[str, str] = {}
 
 
 def main() -> int:
