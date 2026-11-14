@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # Pinned pricing constants (docs/pricing.md). Relative paths resolve from the repo root.
     pricing_config_path: str = "config/pricing.toml"
 
+    # Usage alerts (80% / 100%). Empty URL = alerts go to the log only.
+    alert_webhook_url: str = ""
+    alert_webhook_secret: SecretStr = SecretStr("")
+
 
 @lru_cache
 def get_settings() -> Settings:
