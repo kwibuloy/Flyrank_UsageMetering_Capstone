@@ -1,5 +1,20 @@
 name: metering-billing
 
+x-app: &app
+  build: .
+  image: metering-billing-app
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: postgresql+psycopg://billing:billing@db:5432/billing
+    TEST_DATABASE_URL: postgresql+psycopg://billing:billing@db:5432/billing_test
+  volumes:
+    - .:/srv
+  depends_on:
+    db:
+      condition: service_healthy
+
 services:
   db:
     image: postgres:16-alpine
@@ -18,21 +33,33 @@ services:
       timeout: 3s
       retries: 30
 
+  # HTTP API. Applies migrations on start.
   api:
-    build: .
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      DATABASE_URL: postgresql+psycopg://billing:billing@db:5432/billing
-      TEST_DATABASE_URL: postgresql+psycopg://billing:billing@db:5432/billing_test
+    <<: *app
     ports:
       - "8000:8000"
-    volumes:
-      - .:/srv
+
+  # Background job: applies queued Stripe events with retries (docs/background-jobs.md).
+  worker:
+    <<: *app
+    command: ["python", "-m", "app.jobs.worker"]
+    restart: unless-stopped
+
+  # Stripe CLI (test mode) — optional: `docker compose --profile stripe up -d`
+  # Forwards Stripe webhooks to the api container; no tunnel, no host install.
+  stripe:
+    image: stripe/stripe-cli:v1.55.0
+    profiles: ["stripe"]
+    environment:
+      STRIPE_API_KEY: ${STRIPE_SECRET_KEY:-}
+    command:
+      - listen
+      - --forward-to
+      - http://api:8000/webhooks/stripe
+      - --events
+      - checkout.session.completed,customer.subscription.updated,customer.subscription.deleted
     depends_on:
-      db:
-        condition: service_healthy
+      - api
 
 volumes:
   pgdata:
