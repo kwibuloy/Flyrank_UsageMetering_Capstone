@@ -116,6 +116,17 @@ One pasted proof per requirement (test name + output, curl transcript, or log li
   - **Date:** 2026-11-14
   - **Output:** all five files present; `capstone.yaml` parses (`base_url, endpoints, run, seed, test, …`); seed prints the two demo tenants; demo `/generate` → 200 with `total_microusd: 34250`; `pytest -q` → `134 passed`.
   - **Why this proves it:** the README has the Mermaid architecture diagram, exact setup, plans, pricing, endpoints, tests and limitations, and its commands are identical to `capstone.yaml`.
+  - **Fresh-clone check (docs/workflow.md final step):** `git clone` into an empty folder, own compose project (empty database), then only the README commands:
+    ```
+    $ cp .env.example .env
+    $ docker compose up -d --build        -> db Healthy, api Started, worker Started
+    $ docker compose exec api python scripts/seed.py   -> acme free / globex pro
+    $ curl localhost:8000/health          -> {"status":"ok","db":"ok"}
+    $ curl -X POST localhost:8000/generate ...   -> metered {'api_calls': 1, 'ai_tokens': 12500} total 34250 $0.03
+    $ docker compose exec api pytest -q   -> 134 passed in 12.89s
+    $ docker compose exec api python scripts/probes.py -> P1 PASS, P2 PASS, P3 SKIP (browser), P4 PASS, P5 PASS
+    ```
+    The clone contained no `.env`, `.claude/` or `CLAUDE.md`.
 
 ## Acceptance probes
 - [x] **P1** Same request twice → one event, mirrored response.
