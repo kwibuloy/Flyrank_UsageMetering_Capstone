@@ -187,3 +187,51 @@ class StripeEvent(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UsageAlert(Base):
+    """One row per (tenant, period, metric, threshold, limit): the dedupe and the job queue.
+
+    Inserted in the metering transaction that crosses the threshold; delivered by the
+    worker with retries. Spec: docs/background-jobs.md#usage-alerts.
+    """
+
+    __tablename__ = "usage_alerts"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "period_start",
+            "metric",
+            "threshold_percent",
+            "quota_limit",
+            name="uq_usage_alerts_once",
+        ),
+        CheckConstraint(METRIC_CHECK, name="metric_known"),
+        CheckConstraint("threshold_percent IN (80, 100)", name="threshold_known"),
+        CheckConstraint("status IN ('pending', 'sent', 'dead')", name="status_known"),
+        CheckConstraint("quota_limit > 0 AND used_at_trigger >= 0", name="amounts_valid"),
+        Index("ix_usage_alerts_status_next_attempt_at", "status", "next_attempt_at"),
+        Index("ix_usage_alerts_tenant_period", "tenant_id", "period_start"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    metric: Mapped[str] = mapped_column(Text, nullable=False)
+    threshold_percent: Mapped[int] = mapped_column(Integer, nullable=False)
+    plan_id: Mapped[str] = mapped_column(Text, nullable=False)
+    quota_limit: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    used_at_trigger: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'pending'"))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+    delivery: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

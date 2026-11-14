@@ -40,7 +40,7 @@ def clean_db(migrated: None) -> Iterator[None]:
         conn.execute(
             text(
                 "TRUNCATE usage_events, usage_counters, idempotency_keys, subscriptions, "
-                "stripe_events, tenants RESTART IDENTITY CASCADE"
+                "stripe_events, usage_alerts, tenants RESTART IDENTITY CASCADE"
             )
         )
     yield
