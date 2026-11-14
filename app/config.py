@@ -21,6 +21,9 @@ class Settings(BaseSettings):
 
     worker_poll_seconds: float = 1.0
 
+    # Pinned pricing constants (docs/pricing.md). Relative paths resolve from the repo root.
+    pricing_config_path: str = "config/pricing.toml"
+
 
 @lru_cache
 def get_settings() -> Settings:

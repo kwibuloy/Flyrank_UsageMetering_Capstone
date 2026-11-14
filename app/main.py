@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from app.api.errors import register_error_handlers
 from app.api.routes import billing, generate, health, usage, webhooks
 from app.config import get_settings
+from app.services.pricing import get_price_book
 
 
 def create_app() -> FastAPI:
@@ -17,6 +18,7 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="Idempotent metering, quota enforcement, cost math and Stripe test mode.",
     )
+    get_price_book()  # fail fast on a missing or invalid pricing.toml
     register_error_handlers(app)
     app.include_router(health.router)
     app.include_router(generate.router)
