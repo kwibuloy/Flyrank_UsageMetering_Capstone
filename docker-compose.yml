@@ -36,6 +36,11 @@ services:
   # HTTP API. Applies migrations on start.
   api:
     <<: *app
+    environment:
+      DATABASE_URL: postgresql+psycopg://billing:billing@db:5432/billing
+      TEST_DATABASE_URL: postgresql+psycopg://billing:billing@db:5432/billing_test
+      # uvicorn worker processes (uvicorn reads WEB_CONCURRENCY). See docs/architecture.md.
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
     ports:
       - "8000:8000"
 

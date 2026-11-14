@@ -14,10 +14,19 @@ class Settings(BaseSettings):
     public_base_url: str = "http://localhost:8000"
     log_level: str = "INFO"
 
+    # Connections per process. API processes x (pool + overflow) + worker must stay under
+    # Postgres max_connections (100): 4 x 10 + 10 = 50 by default.
+    db_pool_size: int = 5
+    db_max_overflow: int = 5
+
     # Stripe — test mode only. SecretStr keeps values out of reprs and logs.
     stripe_secret_key: SecretStr = SecretStr("")
     stripe_webhook_secret: SecretStr = SecretStr("")
     stripe_pro_price_id: str = ""
+    # Usage-based billing (docs/stripe.md). Created by scripts/stripe_setup_metering.py;
+    # found by lookup key, so no extra env var is needed. Missing price = feature off.
+    stripe_meter_event_name: str = "usage_cost_picousd"
+    stripe_usage_price_lookup_key: str = "pro_usage_picousd"
 
     worker_poll_seconds: float = 1.0
 
