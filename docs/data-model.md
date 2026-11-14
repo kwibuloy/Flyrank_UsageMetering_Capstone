@@ -38,7 +38,7 @@ PostgreSQL 16 (Docker). Schema changes **only** via Alembic migrations in `migra
 | tenant_id, key | PK (composite) | key scoped per tenant |
 | request_hash | text | SHA-256 of canonical JSON body + method + path |
 | status_code | int null | null while in-flight inside the transaction |
-| response_body | jsonb null | replayed verbatim |
+| response_body | json null | replayed verbatim (`json`, not `jsonb`: jsonb reorders keys) |
 | created_at | timestamptz | retention: 30 days (documented, not enforced in core) |
 
 ### usage_events (append-only)
