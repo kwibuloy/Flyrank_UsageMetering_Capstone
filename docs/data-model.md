@@ -30,6 +30,7 @@ PostgreSQL 16 (Docker). Schema changes **only** via Alembic migrations in `migra
 | stripe_subscription_id | text unique | |
 | status | text | Stripe status verbatim (`active`, `past_due`, `unpaid`, `canceled`, …) |
 | current_period_end | timestamptz | |
+| usage_billing | bool default false | subscription has a metered (usage) price → usage is reported to Stripe |
 | last_event_created | bigint default 0 | Stripe `event.created`; older events are ignored (ordering guard); upsert keeps `greatest()` |
 | updated_at | timestamptz | |
 
@@ -93,6 +94,18 @@ Index: `(status, next_attempt_at)` for the worker claim query.
 | delivery | text null | e.g. `webhook 204`, `log` |
 | created_at, sent_at | timestamptz | |
 Unique: `(tenant_id, period_start, metric, threshold_percent, quota_limit)` — the "once per threshold" guarantee. Indexes: `(status, next_attempt_at)` for the worker, `(tenant_id, period_start)` for `GET /alerts`.
+
+### usage_reports (usage-based billing outbox)
+| column | type | notes |
+|---|---|---|
+| id | bigint identity PK | worker claims oldest first |
+| tenant_id, idempotency_key | unique together | one report per billable request; replays add nothing |
+| stripe_customer_id | text | |
+| identifier | text unique | sent to Stripe for de-duplication |
+| value_picousd | bigint (> 0) | exact unrounded cost, 1 unit = 10⁻¹² USD |
+| occurred_at | timestamptz | meter event timestamp |
+| status, attempts, next_attempt_at, last_error, sent_at | | same retry fields as `stripe_events` |
+Index: `(status, next_attempt_at)`.
 
 ## Tenant isolation
 - Tenant is resolved **only** from `X-API-Key`; no tenant id in URLs or bodies.

@@ -29,6 +29,23 @@ Hard rules: test mode keys only (`sk_test_…`, `whsec_…` from `stripe listen`
 
 Ordering guard: skip an event if `event.created < subscriptions.last_event_created` (outcome `ignored_stale`); the checkout path skips the guard because it just fetched fresh state. A cancel for a different subscription than the one we track → `ignored_other_subscription`. `current_period_end` is read from the subscription, falling back to its first item (API version 2026-10-28 moved it there). Unknown tenant → `TenantNotFound` → retried with backoff, then `dead` + alert (never guess).
 
+## Usage-based billing (metered)
+Pro invoices show the flat monthly fee **plus the metered usage cost**, priced by `config/pricing.toml`. Quotas, 402 and 429 are unchanged. Decision record: [adr/0006-usage-based-billing.md](adr/0006-usage-based-billing.md).
+
+**Setup (once, test mode):** `docker compose exec api python scripts/stripe_setup_metering.py` creates (idempotently) a Billing Meter `usage_cost_picousd` (sum of `value` per `stripe_customer_id`) and a metered monthly price on the Pro product at **$0.000000000001 per unit** (`unit_amount_decimal="0.0000000001"` cents) with lookup key `pro_usage_picousd`. The app finds the price by lookup key — no extra env var. If the price does not exist, checkout sells the flat plan only.
+
+**Flow**
+1. `POST /billing/checkout` adds the usage price as a second line item (metered items take no quantity).
+2. The subscription mirror records `usage_billing = true` when any subscription item has a `metered` price (`stripe_sync.has_metered_item`), on checkout and on every `customer.subscription.updated`.
+3. In the metering transaction, an accepted request from a tenant with `plan = pro`, a metered subscription in `active`/`trialing`, and a Stripe customer inserts a `usage_reports` row: `value_picousd = pricing.exact_picousd(...)`, the **unrounded** integer cost (1 unit = 10⁻¹² USD).
+4. The worker sends each row as `stripe.billing.MeterEvent.create(event_name, payload={stripe_customer_id, value}, identifier, timestamp)` with the usual retries/backoff/dead-letter (`ALERT usage_report_dead`).
+
+**Why pico-USD:** our cost rule is "sum exact numerators, round once" ([pricing.md](pricing.md)). Reporting rounded micro-USD per request would round thousands of times; reporting the exact numerator lets Stripe sum exact values and round once on the invoice, so the invoice matches `GET /usage` (`half_up_div(exact_picousd, 10⁶) == total_microusd`, tested over 1,875 combinations).
+
+**Exactly once at Stripe:** `identifier = "usage_" + sha256(tenant_id:idempotency_key)[:40]` — the same request always yields the same identifier, and Stripe rejects duplicate identifiers (kept unique for at least 24 h), so a retry after a timeout cannot double-bill. Replays and rejected requests never create a row; `(tenant_id, idempotency_key)` is unique.
+
+**Not reported:** Free tenants, flat-fee Pro subscriptions (no metered item), seeded/comped Pro tenants without a subscription, and `past_due`/`unpaid` (already blocked with 402). `GET /usage` → `usage_billing: {enabled, reports_sent, reports_pending, reports_dead, reported_microusd}`.
+
 ## Local loop (Stripe CLI in Docker, no tunnel, no host install)
 The CLI runs as the optional compose service `stripe` (image `stripe/stripe-cli`, pinned). CLI 1.55+ needs an explicit `--events` list; compose passes the three handled types. It authenticates with `STRIPE_SECRET_KEY` from `.env` (passed as `STRIPE_API_KEY`), so no `stripe login` is needed, and forwards to `http://api:8000/webhooks/stripe` over the compose network.
 ```bash

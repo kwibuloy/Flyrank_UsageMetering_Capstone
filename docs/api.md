@@ -34,7 +34,7 @@ Rejections are also stored under the idempotency key, so a retried rejected requ
 Quota error `details`: `{metric, used, limit, requested, period_end, plan, upgrade_url?}`. Rules: [quotas.md](quotas.md).
 
 ### GET /usage
-`used` is the SUM of this period's `usage_events` (the rollup); `usage_counters` are only for locking, and tests assert both agree. `cost` prices the same events for the whole month (token numerators summed, divided once).
+`used` is the SUM of this period's `usage_events` (the rollup); `usage_counters` are only for locking, and tests assert both agree. `cost` prices the same events for the whole month (token numerators summed, divided once). `usage_billing` says whether this tenant's usage is billed through Stripe and how much has been reported: `{enabled, reports_sent, reports_pending, reports_dead, reported_microusd}` ([stripe.md](stripe.md#usage-based-billing-metered)).
 ```json
 {
   "tenant": "acme", "plan": "free", "subscription_status": null,
@@ -84,7 +84,10 @@ This tenant's usage alerts for the current month (stretch goal; [background-jobs
 → `200 {"checkout_url": "https://checkout.stripe.com/…", "session_id": "cs_test_…"}`. Already Pro and active → `409 already_subscribed`. Stripe error → `502 stripe_error`; Stripe env vars missing → `503 stripe_not_configured`.
 
 ### GET /billing/success · GET /billing/cancel
-Branded HTML pages Stripe redirects to. They change nothing: the plan changes only when the verified webhook is processed.
+HTML pages Stripe redirects to, styled like Stripe's payment pages (one centered card, entrance and checkmark animations, `prefers-reduced-motion` respected). The success page repeats the order read back from the Checkout Session (merchant name, line items, amounts; `session_id` must match `cs_(test|live)_…` or it is ignored) and shows whether the webhook has activated Pro: a small inline script polls `GET /billing/status` every 1.5 s (up to ~1 minute) and crossfades "Activating" to "Active" in place, with a `<noscript>` refresh fallback.
+
+### GET /billing/status?session_id=cs_…
+`200 {"status": "active" | "pending" | "unknown"}`: whether the tenant behind that Checkout Session is on Pro yet. Display only; the session-to-tenant lookup is cached so polling calls Stripe once. If Stripe is unreachable the page still renders from the plans table. They change nothing: the plan changes only when the verified webhook is processed.
 
 ### POST /webhooks/stripe
 Raw body, `Stripe-Signature` checked first. → `400 invalid_signature` (nothing stored); `200 {"status":"queued"}` (new handled event; the worker applies it); `200 {"status":"duplicate"}` (event id already seen); `200 {"status":"ignored"}` (unhandled type, stored as `ignored`).

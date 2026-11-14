@@ -22,13 +22,14 @@ app/
     usage_report.py       GET /usage: rollup + cost
     alerts.py             80%/100% threshold crossing (pure) + enqueue in the metering txn
     alert_delivery.py     signed webhook or log sink for usage alerts
+    usage_billing.py      who is billed for usage; outbox enqueue; Stripe meter events
     stripe_sync.py        apply a verified Stripe event to tenant/subscription
     periods.py            billing-period boundaries (UTC calendar month)
-  repositories/           alerts.py, health.py, tenants.py, plans.py, usage.py, idempotency.py, subscriptions.py, stripe_events.py
+  repositories/           alerts.py, health.py, usage_reports.py, tenants.py, plans.py, usage.py, idempotency.py, subscriptions.py, stripe_events.py
   db/
     base.py, models.py, session.py
   jobs/
-    worker.py             polling loop over two queues (stripe_events, usage_alerts); FOR UPDATE SKIP LOCKED
+    worker.py             polling loop over three queues (stripe_events, usage_alerts, usage_reports)
 config/
   pricing.toml            pinned pricing constants (versioned)
 migrations/               Alembic
@@ -40,6 +41,9 @@ tests/
   integration/            real Postgres: idempotency, concurrency, webhooks, isolation
 docker-compose.yml        db, api, worker, stripe (optional profile)
 ```
+
+## Scaling
+The API runs `WEB_CONCURRENCY` uvicorn worker processes (default 4); each has its own DB pool (`DB_POOL_SIZE` + `DB_MAX_OVERFLOW`, default 5 + 5). Keep processes × 10 + the worker's 10 under Postgres `max_connections` (100). Measured with `scripts/loadtest.py` (100 tenants, 5,000 requests, 50 concurrent clients, Docker Desktop, 16 vCPU): 1 process 51 req/s (p95 1,627 ms) → 4 processes 149 req/s (p95 473 ms) → 8 processes 227 req/s (p95 393 ms), all runs with 0 errors and counters == events. A single request is bound by ~14 Postgres round trips, not Python CPU (profiled), so more throughput would come from fewer round trips.
 
 ## Layer rules
 | Layer | May import | Must not |

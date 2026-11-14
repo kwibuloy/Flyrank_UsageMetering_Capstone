@@ -27,6 +27,14 @@ The row lock is held while the event is applied, so there is no `processing` sta
 ## Testing
 Integration tests call `worker.run_once()` directly — deterministic, no sleeps. Cover: success, transient failure then success, 5 failures → dead + alert log captured with `caplog`.
 
+## Queues at a glance
+| Queue (table) | Producer | Sends | Dead-letter alert |
+|---|---|---|---|
+| `stripe_events` | webhook handler | applies plan/subscription changes | `ALERT stripe_event_dead` |
+| `usage_alerts` | metering transaction | 80% / 100% alerts (webhook or log) | `ALERT usage_alert_dead` |
+| `usage_reports` | metering transaction | Stripe meter events (usage on the invoice, [stripe.md](stripe.md#usage-based-billing-metered)) | `ALERT usage_report_dead` |
+All three use the same claim (`FOR UPDATE SKIP LOCKED`), backoff (`2^attempts` s, cap 5 min) and 5-attempt limit. The loop drains all three and sleeps only when all are empty.
+
 ## Usage alerts (stretch goal, built)
 Tell a tenant when a metric reaches **80%** and **100%** of its monthly limit — once per threshold, never duplicated, never lost. Decision record: [adr/0005-usage-alerts.md](adr/0005-usage-alerts.md).
 

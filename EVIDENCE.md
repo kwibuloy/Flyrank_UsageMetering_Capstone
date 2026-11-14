@@ -60,7 +60,7 @@ One pasted proof per requirement (test name + output, curl transcript, or log li
   - **How:** `docker compose exec api pytest -q tests/unit/test_pricing.py tests/integration/test_cost_http.py tests/integration/test_tenant_isolation.py`
   - **Date:** 2026-11-14
   - **Output:** `39 passed in 2.19s`
-  - **Why this proves it:** E1 (cached + reasoning + output) = exactly 33,750 µ$, and the two classic mistakes give different numbers (one rate for all tokens = 20,625; cached billed twice = 38,750); reasoning-only E2 = 10,000 µ$ at the output rate; all-cached E3 = 2,500 µ$; the month rounds once (3 × 1.25 µ$ → 4, not 3); lines + adjustment == total over 1,296 combinations.
+  - **Why this proves it:** E1 (cached + reasoning + output) = exactly 33,750 µ$, and the two classic mistakes give different numbers (one rate for all tokens = 20,625; cached billed twice = 38,750); reasoning-only E2 = 10,000 µ$ at the output rate; all-cached E3 = 2,500 µ$; the month rounds once (3 × 1.25 µ$ → 4, not 3); lines + adjustment == total over 756 valid combinations.
 - [x] **C3** Pricing constants pinned in config; totals proven.
   - **How:** constants in `config/pricing.toml` (version `2026-11-01`); `tests/unit/test_pricing.py::test_pinned_config_file_matches_documented_constants`; invalid files (float money, negative, cached > input, missing key) are rejected and stop the app at startup.
   - **Date:** 2026-11-14
@@ -166,3 +166,37 @@ One pasted proof per requirement (test name + output, curl transcript, or log li
     25 passed (alert tests) · full suite 159 passed
     ```
   - **Why this proves it:** thresholds fire exactly at 800 and 1,000 calls and never again; 20 concurrent requests crossing 80% together create exactly one alert; replays and rejected requests create none; an upgrade re-arms the thresholds; failed deliveries retry with backoff and go `dead` with an `ALERT usage_alert_dead` log after 5 attempts; tenants only see their own alerts. Design: docs/adr/0005-usage-alerts.md.
+
+## Optional features (beyond the brief)
+- [x] **B1** Pro usage reaches the Stripe invoice and matches `GET /usage` to the cent.
+  - **How:** `docker compose exec api python scripts/stripe_setup_metering.py` (once), then `docker compose exec api python -u scripts/probes.py --only B1` and pay the printed Checkout link with `4242 4242 4242 4242`.
+  - **Date:** 2026-11-14
+  - **Output:**
+    ```
+    created meter      mtr_test_61Vl5YxfOAyyrNvUn41DlUAHamMxZ98C event_name=usage_cost_picousd
+    created usage price price_1UbhbcDlUAHamMxZ4Hvxb9zC lookup_key=pro_usage_picousd
+    (re-run: "meter exists" / "usage price exists": idempotent)
+
+    Checkout line items: Pro $20.00 billed monthly + Pro "Price varies, $0.000000000001 per unit"
+
+    # after payment: 7 Pro requests (E1, E2, E3 + 4 x 1,000,000 output tokens)
+           name         | plan_id | status | usage_billing |    stripe_subscription_id    | sent |      pico
+     probe-free-d6eb8368 | pro     | active | t             | sub_1Ubhu8DlUAHamMxZOnRDk5FY |    7 | 40049750000000
+
+    B1 invoice check PASS: Stripe upcoming invoice usage line = 4005 cents; /usage = 40,049,750 µ$ -> expected 4005 cents
+
+    # full end-to-end re-run with the fixed probe (new tenant, new payment)
+    B1 PASS  7 Pro requests -> 7 meter events (identifier usage_b0ed5a39...); /usage 40,049,750 µ$ ($40.05) == Stripe upcoming invoice usage line 4005 cents
+    ```
+  - **Why this proves it:** a real test-mode subscription with the metered price received 7 meter events whose exact pico-USD values sum to 40,049,750 µ$; Stripe's own invoice preview bills $40.05 for usage, the same as `/usage` rounded once. The first probe run failed on a bug in the probe (the invoice preview needs the subscription id); fixed, then re-checked against the same paid subscription. Tests: `tests/integration/test_usage_billing.py`, `tests/unit/test_usage_billing.py`.
+- [x] **L1** Multi-tenant load test: correct under load, and scaled by adding API processes.
+  - **How:** `docker compose exec api python scripts/loadtest.py --tenants 100 --requests 5000 --concurrency 50` with `WEB_CONCURRENCY=1`, `4`, `8`.
+  - **Date:** 2026-11-14
+  - **Output:**
+    ```
+    WEB_CONCURRENCY=1  statuses={200: 5000}  throughput=51 req/s   p50=943ms  p95=1627ms  usage_events=5000 counters_mismatched=0  CORRECT
+    WEB_CONCURRENCY=4  statuses={200: 5000}  throughput=149 req/s  p50=319ms  p95=473ms   usage_events=5000 counters_mismatched=0  CORRECT
+    WEB_CONCURRENCY=8  statuses={200: 5000}  throughput=227 req/s  p50=198ms  p95=393ms   usage_events=5000 counters_mismatched=0  CORRECT
+    ```
+  - **Why this proves it:** 15,000 requests across 300 tenants with zero errors, zero lost or double-counted events, and counters equal to event sums for every tenant; one process was the bottleneck (profiling: Postgres round trips), and 4 processes (the default, 50 of 100 Postgres connections) gave 2.9x the throughput. Docker Desktop on Windows, 16 vCPU, load generator in the same container.
+- [ ] **CI1** GitHub Actions: lint, tests (Postgres 16, migration checks), README flow + probes in Docker. *Recorded after the first push.*

@@ -9,6 +9,8 @@ run: docker compose up -d --build
 seed: docker compose exec api python scripts/seed.py
 test: docker compose exec api pytest -q
 probes: docker compose exec api python scripts/probes.py
+loadtest: docker compose exec api python scripts/loadtest.py --tenants 100 --requests 5000 --concurrency 50
+ci: .github/workflows/ci.yml
 base_url: http://localhost:8000
 
 demo_tenants:

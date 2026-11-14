@@ -1,5 +1,7 @@
 # Usage Metering & Billing Engine
 
+[![CI](https://github.com/kwibuloy/Flyrank_UsageMetering_Capstone/actions/workflows/ci.yml/badge.svg)](https://github.com/kwibuloy/Flyrank_UsageMetering_Capstone/actions/workflows/ci.yml)
+
 A multi-tenant backend that meters API calls and AI tokens exactly once, enforces monthly plan quotas, prices usage with exact integer money math, and sells a Pro plan through Stripe Checkout (test mode), with plan changes driven only by verified webhooks.
 
 FlyRank backend capstone. Every requirement has captured proof in [EVIDENCE.md](EVIDENCE.md); design decisions live in [docs/](docs/README.md).
@@ -10,6 +12,7 @@ FlyRank backend capstone. Every requirement has captured proof in [EVIDENCE.md](
 - **402 vs 429.** `402 payment_required` when paying fixes it (Free plan exhausted, subscription past due); `429 quota_exceeded` + `Retry-After` when only waiting fixes it (Pro exhausted until the month resets).
 - **Cost.** Integer micro-USD. Cached input, fresh input, output and reasoning tokens are priced separately from pinned constants in [config/pricing.toml](config/pricing.toml), summed exactly and rounded once.
 - **Stripe.** Checkout in test mode; webhooks are signature-checked, de-duplicated by event id, and applied by a background worker with retries, backoff and a dead-event alert.
+- **Usage on the Stripe invoice.** Each Pro request's exact cost is reported to a Stripe Billing Meter from a transactional outbox, so the invoice shows the flat fee plus metered usage and matches `GET /usage` to the cent. Quotas and 402/429 are unchanged.
 - **Usage alerts (stretch).** When a tenant reaches 80% and 100% of a monthly limit, exactly one alert per threshold is queued in the same transaction as the usage and delivered by the worker to a signed webhook (Slack-compatible) or the log, with retries. Tenants see them at `GET /alerts`.
 
 ## Plans
@@ -92,7 +95,11 @@ Interactive API docs: http://localhost:8000/docs
    docker compose up -d --force-recreate api worker
    docker compose --profile stripe up -d
    ```
-4. `POST /billing/checkout` with a Free tenant's key, open the returned URL and pay with `4242 4242 4242 4242`. Within seconds `GET /usage` shows `plan: pro` and the Pro limits.
+4. Optional, usage on the invoice: create the Billing Meter and the metered usage price once (idempotent, test mode):
+   ```bash
+   docker compose exec api python scripts/stripe_setup_metering.py
+   ```
+5. `POST /billing/checkout` with a Free tenant's key, open the returned URL and pay with `4242 4242 4242 4242`. Within seconds `GET /usage` shows `plan: pro` and the Pro limits (and `usage_billing.enabled: true` if step 4 was done).
 
 Details and troubleshooting: [docs/stripe.md](docs/stripe.md).
 
@@ -117,13 +124,17 @@ Every error uses one envelope: `{"error": {"code", "message", "details"}}`. Full
 docker compose exec api pytest -q                       # unit + integration (real Postgres)
 docker compose exec api python scripts/probes.py        # acceptance probes P1, P2, P4, P5 + alerts A1
 docker compose exec api python -u scripts/probes.py --only P3   # live Checkout: pay in the browser
+docker compose exec api python -u scripts/probes.py --only B1   # usage on a real Stripe invoice preview
+docker compose exec api python scripts/loadtest.py --tenants 100 --requests 5000 --concurrency 50
 ```
-Integration tests run against a separate `billing_test` database created by the compose Postgres on first start.
+Integration tests run against a separate `billing_test` database created by the compose Postgres on first start. CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs lint, the full suite with migration checks, and this README's Docker flow with the probes on every push.
+
+The load test creates throwaway tenants, fires unique requests round-robin, and then verifies from Postgres that accepted requests == usage events and counters == `SUM(events)` for every tenant. On Docker Desktop (16 vCPU), 100 tenants and 50 concurrent clients: 1 API process 51 req/s → 4 processes (default) 149 req/s, p95 473 ms, 0 errors. Scaling notes: [docs/architecture.md](docs/architecture.md#scaling).
 
 ## Limitations (honest)
 - **Operator alerts go to logs.** A dead Stripe event or undeliverable usage alert logs `ALERT …`; there is no pager integration.
 - **Usage alerts use one webhook for all tenants** (an operator channel), and delivery is at-least-once (receivers de-duplicate on `alert_id`). Per-tenant endpoints and email are not built.
-- **Cost is a usage figure, not an invoice.** The USD cost in `/usage` is computed by this service; it is not sent to Stripe as metered billing. Stripe only charges the flat Pro subscription (in the Stripe account's currency).
+- **Usage billing covers Pro only, one meter event per request.** Free usage is never charged. High volume would need per-customer batching (one Stripe call per request today). Subscriptions created before the usage price existed stay flat-fee until they are changed in Stripe.
 - **One price book per period.** Events do not store the pricing version, so changing `pricing.toml` mid-month re-prices the whole month. Fine for a pinned config; a real system would version prices per event.
 - **Local webhooks depend on the Stripe CLI.** While the CLI reconnects it does not forward events (`stripe events resend` redelivers them). Production would use a dashboard webhook endpoint.
 - **Plan changes apply immediately.** Downgrading mid-month keeps the month's usage, so a tenant over the Free limits is blocked until next month. No proration logic beyond what Stripe does.

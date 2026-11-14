@@ -12,7 +12,7 @@ The source of truth for *how this system works and why*.
 | [idempotency.md](idempotency.md) | Anything on the metering write path or webhook dedupe |
 | [quotas.md](quotas.md) | Limits, the boundary rule, 429 vs 402, billing periods |
 | [pricing.md](pricing.md) | Cost math, token rules, pricing constants, rounding |
-| [stripe.md](stripe.md) | Checkout, webhooks, signature verification, Stripe CLI |
+| [stripe.md](stripe.md) | Checkout, webhooks, signature verification, usage-based billing (meters), Stripe CLI |
 | [background-jobs.md](background-jobs.md) | The worker, job queues, retries, failure alerts, 80%/100% usage alerts |
 | [conventions.md](conventions.md) | Code style, money types, validation, logging, testing |
 | [workflow.md](workflow.md) | Phases and gates, commits, EVIDENCE.md / BUILDLOG.md discipline |
