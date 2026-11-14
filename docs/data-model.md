@@ -30,7 +30,8 @@ PostgreSQL 16 (Docker). Schema changes **only** via Alembic migrations in `migra
 | stripe_subscription_id | text unique | |
 | status | text | Stripe status verbatim (`active`, `past_due`, `unpaid`, `canceled`, …) |
 | current_period_end | timestamptz | |
-| last_event_created | bigint | Stripe `event.created`; older events are ignored (ordering guard) |
+| last_event_created | bigint default 0 | Stripe `event.created`; older events are ignored (ordering guard); upsert keeps `greatest()` |
+| updated_at | timestamptz | |
 
 ### idempotency_keys
 | column | type | notes |
@@ -67,10 +68,13 @@ Index: `(tenant_id, period_start, metric)` for rollups.
 | id | text PK | Stripe `evt_…` id → dedupe |
 | type | text | |
 | payload | jsonb | verified event |
-| status | text | `pending` \| `processing` \| `done` \| `dead` \| `ignored` |
+| status | text (check) | `pending` \| `done` \| `dead` \| `ignored` (no `processing`: the row lock covers it, see [background-jobs.md](background-jobs.md)) |
+| outcome | text null | what applying did, e.g. `plan=pro status=active`, `ignored_stale` |
 | attempts | int | |
 | next_attempt_at | timestamptz | backoff |
-| last_error | text null | never contains secrets |
+| last_error | text null | exception class + message; never payloads or secrets |
+| received_at | timestamptz | worker processes oldest first |
+| processed_at | timestamptz null | set when `done` |
 Index: `(status, next_attempt_at)` for the worker claim query.
 
 ## Tenant isolation

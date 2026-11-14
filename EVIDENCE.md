@@ -46,8 +46,42 @@ One pasted proof per requirement (test name + output, curl transcript, or log li
 - [ ] **C3** Pricing constants pinned in config; totals proven.
 
 ## Stripe integration
-- [ ] **S1** Subscription Checkout works end-to-end in test mode.
-- [ ] **S2** Webhooks verify signatures, ignore duplicates, update plan/status.
+- [x] **S1** Subscription Checkout works end-to-end in test mode.
+  - **How:** `docker compose --profile stripe up -d` then `docker compose exec api python -u scripts/probes.py --only P3`; open the printed Checkout URL and pay with `4242 4242 4242 4242`.
+  - **Date:** 2026-11-14
+  - **Output:**
+    ```
+    # Stripe CLI listener (docker compose logs stripe)
+    2026-11-14 12:36:04   --> checkout.session.completed [evt_1UbgBcDlUAHamMxZ11fBjsOB]
+    2026-11-14 12:36:04  <--  [200] POST http://api:8000/webhooks/stripe [evt_1UbgBcDlUAHamMxZ11fBjsOB]
+    # worker
+    12:36:05 INFO app.jobs.worker stripe_event_done id=evt_1UbgBcDlUAHamMxZ11fBjsOB type=checkout.session.completed outcome=plan=pro status=active
+    # database
+           name         | plan_id | status |    stripe_subscription_id    |   current_period_end
+     probe-free-d95fac2b | pro     | active | sub_1UbgBaDlUAHamMxZ0oedHzHi | 2026-12-14 12:36:01+00
+    # probe
+    P3 PASS  Free -> pro (active) via webhook; limits {'api_calls': 50000, 'ai_tokens': 5000000}
+    ```
+  - **Why this proves it:** a real test-mode Checkout payment produced a real Stripe event, which reached our webhook, was applied by the worker, and moved the tenant to Pro with a real subscription id and period end. The success page itself changes nothing (`test_success_page_shows_real_limits_and_changes_nothing`).
+- [x] **S2** Webhooks verify signatures, ignore duplicates, update plan/status.
+  - **How:** `curl` with a forged signature; `stripe events resend` of a real event; `pytest tests/integration/test_webhooks.py tests/integration/test_stripe_sync.py`
+  - **Date:** 2026-11-14
+  - **Output:**
+    ```
+    $ curl -i -X POST localhost:8000/webhooks/stripe -H "Stripe-Signature: t=1,v1=bad" -d '{}'
+    HTTP/1.1 400 Bad Request
+    {"error":{"code":"invalid_signature","message":"Webhook signature verification failed.","details":{}}}
+
+    # real event delivered twice (trigger, then `stripe events resend`), both 200
+    2026-11-14 03:43:13  <--  [200] POST http://api:8000/webhooks/stripe [evt_1UbXrwDlUAHamMxZyxtObn0O]
+    2026-11-14 03:43:33  <--  [200] POST http://api:8000/webhooks/stripe [evt_1UbXrwDlUAHamMxZyxtObn0O]
+                  id              |            type            | status | attempts |         outcome
+     evt_1UbXrwDlUAHamMxZyxtObn0O | checkout.session.completed | done   |        1 | skipped_not_subscription
+
+    # full suite
+    96 passed in 12.65s
+    ```
+  - **Why this proves it:** bad signatures are rejected before anything is stored; a redelivered event id is stored once and applied once (`attempts=1`); tests cover Free→Pro, cancel→Free, past_due→402, out-of-order events ignored, transient failure retried, and 5 failures → dead + `ALERT stripe_event_dead` log (the background job requirement).
 
 ## Data model, tests & documentation
 - [ ] **D1** Tenants, plans, subscriptions, usage events; tenant isolation.
@@ -60,6 +94,10 @@ One pasted proof per requirement (test name + output, curl transcript, or log li
 - [x] **P2** Exact quota boundary → documented behaviour; next → 429/402.
   - **How:** `docker compose exec api python scripts/probes.py --only P2` · **Date:** 2026-11-14
   - **Output:** `P2 PASS  #1000 -> 200, #1001 -> 402 'Monthly API call quota exceeded on the Free plan: 1,000 of 1,000 used, this request needs 1. Upgrade to Pro to continue.'; tokens 100,000 -> 200, +1 -> 402`
-- [ ] **P3** Test Checkout → Free → Pro; `/usage` shows new limits.
-- [ ] **P4** Forged webhook → 400; replayed event processed once.
+- [x] **P3** Test Checkout → Free → Pro; `/usage` shows new limits.
+  - **How:** `docker compose exec api python -u scripts/probes.py --only P3` (pay in the browser) · **Date:** 2026-11-14
+  - **Output:** `P3 PASS  Free -> pro (active) via webhook; limits {'api_calls': 50000, 'ai_tokens': 5000000}`
+- [x] **P4** Forged webhook → 400; replayed event processed once.
+  - **How:** `docker compose exec api python scripts/probes.py --only P4` · **Date:** 2026-11-14
+  - **Output:** `P4 PASS  forged -> 400, 0 rows stored; replay -> queued then duplicate; worker applied once (attempts=1, outcome 'plan=pro status=active')`
 - [ ] **P5** Pricing rules → exact expected totals; `/usage` matches.

@@ -48,10 +48,13 @@ Quota error `details`: `{metric, used, limit, requested, period_end, plan, upgra
 ```
 
 ### POST /billing/checkout
-→ `200 {"checkout_url": "https://checkout.stripe.com/…", "session_id": "cs_test_…"}`. Already Pro and active → `409 already_subscribed`.
+→ `200 {"checkout_url": "https://checkout.stripe.com/…", "session_id": "cs_test_…"}`. Already Pro and active → `409 already_subscribed`. Stripe error → `502 stripe_error`; Stripe env vars missing → `503 stripe_not_configured`.
+
+### GET /billing/success · GET /billing/cancel
+Branded HTML pages Stripe redirects to. They change nothing: the plan changes only when the verified webhook is processed.
 
 ### POST /webhooks/stripe
-Raw body. → `400` forged; `200 {"status":"queued"}`; `200 {"status":"duplicate"}`; `200 {"status":"ignored"}` for unhandled types.
+Raw body, `Stripe-Signature` checked first. → `400 invalid_signature` (nothing stored); `200 {"status":"queued"}` (new handled event; the worker applies it); `200 {"status":"duplicate"}` (event id already seen); `200 {"status":"ignored"}` (unhandled type, stored as `ignored`).
 
 ### GET /health
 `200 {"status":"ok","db":"ok"}`; DB down → `503`.
