@@ -6,7 +6,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.repositories import usage as usage_repo
-from app.services.metrics import CHECK_ORDER
+from app.services import pricing
+from app.services.metrics import API_CALLS, CHECK_ORDER
 from app.services.periods import iso_z, period_bounds
 from app.services.tenancy import TenantContext
 
@@ -31,10 +32,14 @@ def current_usage(
 ) -> dict[str, Any]:
     start, end = period_bounds(now or datetime.now(UTC))
     used = usage_repo.rollup(session, tenant.id, start.date())
+    tokens = pricing.TokenUsage(**usage_repo.token_sums(session, tenant.id, start.date()))
+    cost = pricing.quote(used.get(API_CALLS, 0), tokens, pricing.get_price_book())
     return {
         "tenant": tenant.name,
         "plan": tenant.plan_id,
         "subscription_status": tenant.subscription_status,
         "period": period_json(start, end),
         "metrics": metrics_snapshot(tenant.limits, used),
+        # Rolled up from the same events as `metrics`; token numerators divided once.
+        "cost": cost.to_json(),
     }

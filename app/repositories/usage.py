@@ -90,3 +90,21 @@ def rollup(session: Session, tenant_id: uuid.UUID, period_start: date) -> dict[s
         .group_by(UsageEvent.metric)
     ).all()
     return {metric: int(total) for metric, total in rows}
+
+
+def token_sums(session: Session, tenant_id: uuid.UUID, period_start: date) -> dict[str, int]:
+    """SUM of each token column over this period's ai_tokens events (pricing input)."""
+    row = session.execute(
+        select(
+            func.coalesce(func.sum(UsageEvent.input_tokens), 0),
+            func.coalesce(func.sum(UsageEvent.cached_input_tokens), 0),
+            func.coalesce(func.sum(UsageEvent.output_tokens), 0),
+            func.coalesce(func.sum(UsageEvent.reasoning_tokens), 0),
+        ).where(
+            UsageEvent.tenant_id == tenant_id,
+            UsageEvent.period_start == period_start,
+            UsageEvent.metric == AI_TOKENS,
+        )
+    ).one()
+    keys = ("input", "cached", "output", "reasoning")
+    return {key: int(value) for key, value in zip(keys, row, strict=True)}

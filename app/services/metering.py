@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.repositories import idempotency as idempotency_repo
 from app.repositories import usage as usage_repo
-from app.services import quota
+from app.services import pricing, quota
 from app.services.errors import IdempotencyKeyReuse
 from app.services.metrics import AI_TOKENS, API_CALLS, METRICS
 from app.services.periods import period_bounds
@@ -28,6 +28,14 @@ class UsageRequest:
     cached_input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
+
+    def tokens(self) -> pricing.TokenUsage:
+        return pricing.TokenUsage(
+            input=self.input_tokens,
+            cached=self.cached_input_tokens,
+            output=self.output_tokens,
+            reasoning=self.reasoning_tokens,
+        )
 
     def quantities(self) -> dict[str, int]:
         # Cached input is a subset of input, so it is not added again (docs/quotas.md).
@@ -115,6 +123,9 @@ def record_usage(
         "request_id": str(uuid.uuid4()),
         "idempotency_key": idempotency_key,
         "metered": requested,
+        "cost": pricing.quote(
+            requested[API_CALLS], usage.tokens(), pricing.get_price_book()
+        ).to_json(),
         "usage": metrics_snapshot(tenant.limits, used_after),
         "period": period_json(start, end),
     }
