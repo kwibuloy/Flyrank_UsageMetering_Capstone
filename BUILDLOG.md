@@ -16,3 +16,8 @@ Where AI helped, where it was wrong, what I changed.
   - The Stripe CLI 1.55 `listen` command refused to start without an `--events` list; added the three handled types to `docker-compose.yml`.
   - The first live P3 run timed out after 15 minutes because no payment event arrived in the window; the rerun passed. While checking, the listener log showed `Session expired, reconnecting...`, and events sent during that gap are not forwarded, so `docs/stripe.md` now says to check for it and use `stripe events resend`.
   - First design had a `processing` status plus a "reset stuck rows" sweep. Holding the row lock (`FOR UPDATE SKIP LOCKED`) while applying the event and marking it `done` in the same transaction removes both; the docs were updated to match.
+
+## 2026-11-14 · Phase 4 · Cost math, README and submission files
+- **AI helped:** Claude Code wrote `config/pricing.toml`, the pure integer pricing module (`app/services/pricing.py`), the monthly cost rollup in `/usage` and per-request cost in `/generate`, 38 more tests, probe P5, the README with its Mermaid diagram, and `capstone.yaml`.
+- **Design decision:** showing per-category lines means rounding each line, but the rule is "divide once per period" (three requests of 1 fresh input token are 3.75 µ$, which rounds to 4, not 1+1+1). So the total comes from the summed numerators, and the response reports a `rounding_adjustment_microusd` so lines + adjustment always equal the total, as on an invoice. A test pins this case.
+- **AI was wrong / I changed:** editing `scripts/probes.py` from Windows wrote the `µ` symbol as Windows-1252, and the probe crashed in the container with a non-UTF-8 error. Re-encoded the file as UTF-8 and checked every changed file.

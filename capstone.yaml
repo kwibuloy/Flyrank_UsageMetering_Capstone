@@ -1,0 +1,52 @@
+name: usage-metering-billing-engine
+description: >
+  Multi-tenant usage metering and billing: idempotent metering, plan quotas (402/429),
+  integer micro-USD cost math, Stripe test-mode Checkout and verified webhooks.
+
+# Commands are identical to README.md.
+setup: cp .env.example .env
+run: docker compose up -d --build
+seed: docker compose exec api python scripts/seed.py
+test: docker compose exec api pytest -q
+probes: docker compose exec api python scripts/probes.py
+base_url: http://localhost:8000
+
+demo_tenants:
+  - name: acme
+    plan: free
+    api_key: demo_free_acme_key
+  - name: globex
+    plan: pro
+    api_key: demo_pro_globex_key
+
+endpoints:
+  - method: GET
+    path: /health
+    auth: none
+    description: Liveness and database check.
+  - method: POST
+    path: /generate
+    auth: X-API-Key
+    headers: [Idempotency-Key]
+    body: '{"input_tokens":10000,"cached_input_tokens":4000,"output_tokens":2000,"reasoning_tokens":500}'
+    description: Simulated AI call. Meters 1 API call plus tokens exactly once; returns its cost. 402/429 at quota.
+  - method: GET
+    path: /usage
+    auth: X-API-Key
+    description: Current month's usage, limits, remaining and cost rollup in micro-USD.
+  - method: POST
+    path: /billing/checkout
+    auth: X-API-Key
+    description: Creates a Stripe Checkout session (test mode) for the Pro plan.
+  - method: GET
+    path: /billing/success
+    auth: none
+    description: Checkout success page (display only; the webhook changes the plan).
+  - method: GET
+    path: /billing/cancel
+    auth: none
+    description: Checkout cancel page.
+  - method: POST
+    path: /webhooks/stripe
+    auth: Stripe-Signature
+    description: Verified Stripe events, de-duplicated by event id, applied by the worker.

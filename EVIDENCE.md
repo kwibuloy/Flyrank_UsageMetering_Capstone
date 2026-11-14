@@ -41,9 +41,31 @@ One pasted proof per requirement (test name + output, curl transcript, or log li
   - **Why this proves it:** 402 when upgrading fixes it, 429 + Retry-After when only waiting fixes it (docs/adr/0004); messages name the metric, the numbers and the fix.
 
 ## Cost calculation
-- [ ] **C1** Monthly usage rolls up into a cost figure per tenant.
-- [ ] **C2** Token pricing handles cached input, reasoning, and output correctly.
-- [ ] **C3** Pricing constants pinned in config; totals proven.
+- [x] **C1** Monthly usage rolls up into a cost figure per tenant.
+  - **How:** README demo request for tenant `acme`, then `curl localhost:8000/usage -H "X-API-Key: demo_free_acme_key"`
+  - **Date:** 2026-11-14
+  - **Output (excerpt):**
+    ```
+    "metrics": {"api_calls": {"used": 1, "limit": 1000, "remaining": 999},
+                "ai_tokens": {"used": 12500, "limit": 100000, "remaining": 87500}},
+    "cost": {"pricing_version": "2026-11-01", "currency": "USD",
+      "lines": {"api_calls":           {"quantity": 1,    "rate_microusd": 500,      "amount_microusd": 500},
+                "input_tokens":        {"quantity": 6000, "rate_microusd": 1250000,  "amount_microusd": 7500},
+                "cached_input_tokens": {"quantity": 4000, "rate_microusd": 312500,   "amount_microusd": 1250},
+                "output_tokens":       {"quantity": 2500, "rate_microusd": 10000000, "amount_microusd": 25000}},
+      "rounding_adjustment_microusd": 0, "total_microusd": 34250, "total_display": "$0.03"}
+    ```
+  - **Why this proves it:** `/usage` prices the tenant's current-month events (the same rows `metrics` sums) into one integer total; `test_usage_rolls_up_the_month_and_matches_requests` checks a 3-request month equals 47,750 µ$, and `test_cost_is_isolated_per_tenant` checks another tenant stays at 0.
+- [x] **C2** Token pricing handles cached input, reasoning, and output correctly.
+  - **How:** `docker compose exec api pytest -q tests/unit/test_pricing.py tests/integration/test_cost_http.py tests/integration/test_tenant_isolation.py`
+  - **Date:** 2026-11-14
+  - **Output:** `39 passed in 2.19s`
+  - **Why this proves it:** E1 (cached + reasoning + output) = exactly 33,750 µ$, and the two classic mistakes give different numbers (one rate for all tokens = 20,625; cached billed twice = 38,750); reasoning-only E2 = 10,000 µ$ at the output rate; all-cached E3 = 2,500 µ$; the month rounds once (3 × 1.25 µ$ → 4, not 3); lines + adjustment == total over 1,296 combinations.
+- [x] **C3** Pricing constants pinned in config; totals proven.
+  - **How:** constants in `config/pricing.toml` (version `2026-11-01`); `tests/unit/test_pricing.py::test_pinned_config_file_matches_documented_constants`; invalid files (float money, negative, cached > input, missing key) are rejected and stop the app at startup.
+  - **Date:** 2026-11-14
+  - **Output:** `config/pricing.toml` → `price_per_call_microusd = 500`, `input_per_million_microusd = 1_250_000`, `cached_input_per_million_microusd = 312_500`, `output_per_million_microusd = 10_000_000`; test suite `134 passed`.
+  - **Why this proves it:** the shipped file is asserted equal to the documented price book, and every worked example in docs/pricing.md is an exact-integer test; changing a price fails the tests until docs and tests are updated together.
 
 ## Stripe integration
 - [x] **S1** Subscription Checkout works end-to-end in test mode.
@@ -84,8 +106,16 @@ One pasted proof per requirement (test name + output, curl transcript, or log li
   - **Why this proves it:** bad signatures are rejected before anything is stored; a redelivered event id is stored once and applied once (`attempts=1`); tests cover Free→Pro, cancel→Free, past_due→402, out-of-order events ignored, transient failure retried, and 5 failures → dead + `ALERT stripe_event_dead` log (the background job requirement).
 
 ## Data model, tests & documentation
-- [ ] **D1** Tenants, plans, subscriptions, usage events; tenant isolation.
-- [ ] **D2** README + architecture diagram + setup; required files present.
+- [x] **D1** Tenants, plans, subscriptions, usage events; tenant isolation.
+  - **How:** `\dt` on the app database after `alembic upgrade head`; `tests/integration/test_tenant_isolation.py`, `test_cost_http.py::test_cost_is_isolated_per_tenant`
+  - **Date:** 2026-11-14
+  - **Output:** tables `idempotency_keys, plans, stripe_events, subscriptions, tenants, usage_counters, usage_events` (+ `alembic_version`); isolation tests pass (in the `39 passed` run above).
+  - **Why this proves it:** migrations 0001–0002 create every required table with FKs, uniques and the rollup index; the tenant comes only from `X-API-Key`, every tenant query filters by `tenant_id`, and tests show tenant B can neither see nor change tenant A's usage or cost.
+- [x] **D2** README + architecture diagram + setup; required files present.
+  - **How:** `ls README.md capstone.yaml EVIDENCE.md BUILDLOG.md .env.example`; ran the README's run/seed/demo/test commands as written.
+  - **Date:** 2026-11-14
+  - **Output:** all five files present; `capstone.yaml` parses (`base_url, endpoints, run, seed, test, …`); seed prints the two demo tenants; demo `/generate` → 200 with `total_microusd: 34250`; `pytest -q` → `134 passed`.
+  - **Why this proves it:** the README has the Mermaid architecture diagram, exact setup, plans, pricing, endpoints, tests and limitations, and its commands are identical to `capstone.yaml`.
 
 ## Acceptance probes
 - [x] **P1** Same request twice → one event, mirrored response.
@@ -100,4 +130,7 @@ One pasted proof per requirement (test name + output, curl transcript, or log li
 - [x] **P4** Forged webhook → 400; replayed event processed once.
   - **How:** `docker compose exec api python scripts/probes.py --only P4` · **Date:** 2026-11-14
   - **Output:** `P4 PASS  forged -> 400, 0 rows stored; replay -> queued then duplicate; worker applied once (attempts=1, outcome 'plan=pro status=active')`
-- [ ] **P5** Pricing rules → exact expected totals; `/usage` matches.
+- [x] **P5** Pricing rules → exact expected totals; `/usage` matches.
+  - **How:** `docker compose exec api python scripts/probes.py` · **Date:** 2026-11-14
+  - **Output:** `P5 PASS  E1 34,250 + E2 10,500 + E3 3,000 µ$ per request; /usage total 47,750 µ$ ($0.05) lines {'api_calls': 1500, 'input_tokens': 7500, 'cached_input_tokens': 3750, 'output_tokens': 35000}`
+  - Same run: `P1 PASS`, `P2 PASS`, `P4 PASS` (P3 is interactive; its PASS is recorded above).

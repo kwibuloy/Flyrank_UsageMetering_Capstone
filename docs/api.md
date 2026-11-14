@@ -24,7 +24,7 @@ Body (simulated usage):
 Validation: all ints ≥ 0; `cached_input_tokens <= input_tokens`; total tokens ≤ 1,000,000 per request.
 | Status | When |
 |---|---|
-| 200 | Accepted and metered. Body: `{request_id, idempotency_key, metered: {api_calls: 1, ai_tokens: N}, usage: {metric: {used, limit, remaining}}, period: {start, end}}` (`cost_microusd` added in Phase 4) |
+| 200 | Accepted and metered. Body: `{request_id, idempotency_key, metered: {api_calls: 1, ai_tokens: N}, usage: {metric: {used, limit, remaining}}, period: {start, end}, cost}` — `cost` is this request's price (shape below) |
 | 200 (replay) | Same key + same body → stored body verbatim, header `Idempotent-Replayed: true` |
 | 402 `payment_required` | Free plan quota exhausted (upgrade) or subscription `past_due`/`unpaid` |
 | 429 `quota_exceeded` | Pro quota exhausted; `Retry-After` = seconds to period end |
@@ -34,7 +34,7 @@ Rejections are also stored under the idempotency key, so a retried rejected requ
 Quota error `details`: `{metric, used, limit, requested, period_end, plan, upgrade_url?}`. Rules: [quotas.md](quotas.md).
 
 ### GET /usage
-`used` is the SUM of this period's `usage_events` (the rollup); `usage_counters` are only for locking, and tests assert both agree. `cost` is added in Phase 4.
+`used` is the SUM of this period's `usage_events` (the rollup); `usage_counters` are only for locking, and tests assert both agree. `cost` prices the same events for the whole month (token numerators summed, divided once).
 ```json
 {
   "tenant": "acme", "plan": "free", "subscription_status": null,
@@ -43,9 +43,27 @@ Quota error `details`: `{metric, used, limit, requested, period_end, plan, upgra
     "api_calls": { "used": 12, "limit": 1000, "remaining": 988 },
     "ai_tokens": { "used": 150000, "limit": 100000, "remaining": 0 }
   },
-  "cost": { "pricing_version": "2026-11-01", "lines": { "api_calls": 6000, "input": 0, "cached_input": 0, "output": 0 }, "total_microusd": 0, "total_display": "$0.00" }
+  "cost": { "...": "same shape as below" }
 }
 ```
+
+### The `cost` object (both `/generate` and `/usage`)
+All amounts are integer micro-USD (`1 USD = 1,000,000`). Example for request E1 plus its API call:
+```json
+{
+  "pricing_version": "2026-11-01", "currency": "USD",
+  "lines": {
+    "api_calls":           { "quantity": 1,    "rate_microusd": 500,      "rate_unit": "per_call",           "amount_microusd": 500 },
+    "input_tokens":        { "quantity": 6000, "rate_microusd": 1250000,  "rate_unit": "per_million_tokens", "amount_microusd": 7500 },
+    "cached_input_tokens": { "quantity": 4000, "rate_microusd": 312500,   "rate_unit": "per_million_tokens", "amount_microusd": 1250 },
+    "output_tokens":       { "quantity": 2500, "rate_microusd": 10000000, "rate_unit": "per_million_tokens", "amount_microusd": 25000 }
+  },
+  "rounding_adjustment_microusd": 0,
+  "total_microusd": 34250,
+  "total_display": "$0.03"
+}
+```
+`lines` explain the bill; `total_microusd` is authoritative. Token lines are each rounded half-up for display, while the token subtotal divides the summed numerators once, so `sum(lines) + rounding_adjustment_microusd == total_microusd` always holds (the adjustment is at most ±1 µ$ per line). `quantity` for `input_tokens` is *fresh* input (input minus cached); `output_tokens` includes reasoning. Rules: [pricing.md](pricing.md).
 
 ### POST /billing/checkout
 → `200 {"checkout_url": "https://checkout.stripe.com/…", "session_id": "cs_test_…"}`. Already Pro and active → `409 already_subscribed`. Stripe error → `502 stripe_error`; Stripe env vars missing → `503 stripe_not_configured`.

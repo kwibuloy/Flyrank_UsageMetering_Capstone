@@ -11,15 +11,18 @@ app/
     deps.py               DB session, tenant-from-API-key, Idempotency-Key header
     errors.py             AppError → JSON error envelope; validation → 422
     schemas.py            request/response models
+    pages.py              HTML for the Checkout success/cancel redirect pages
     routes/               generate.py, usage.py, billing.py, webhooks.py, health.py
   services/
-    metering.py           MeterService.record(...) — the exactly-once path
+    metering.py           record_usage(...) — the exactly-once path
     quota.py              pure decision: allow / 402 / 429
     pricing.py            pure integer cost math
     billing.py            Stripe Checkout session creation
+    webhooks.py           verify signature, store/dedupe stripe_events
+    usage_report.py       GET /usage: rollup + cost
     stripe_sync.py        apply a verified Stripe event to tenant/subscription
     periods.py            billing-period boundaries (UTC calendar month)
-  repositories/           tenants.py, usage.py, idempotency.py, subscriptions.py, stripe_events.py
+  repositories/           tenants.py, plans.py, usage.py, idempotency.py, subscriptions.py, stripe_events.py
   db/
     base.py, models.py, session.py
   jobs/
@@ -33,7 +36,7 @@ scripts/
 tests/
   unit/                   pricing, quota decisions, periods (no DB)
   integration/            real Postgres: idempotency, concurrency, webhooks, isolation
-docker-compose.yml        db, api, worker
+docker-compose.yml        db, api, worker, stripe (optional profile)
 ```
 
 ## Layer rules
@@ -52,7 +55,7 @@ Errors: services raise typed `AppError` subclasses (`QuotaExceeded`, `PaymentReq
 ```
 POST /generate
   deps: tenant ← X-API-Key ; key ← Idempotency-Key ; body validated (422)
-  MeterService.record(tenant, request, key)          [one transaction]
+  metering.record_usage(tenant, request, key)        [one transaction]
     ├─ idempotency_keys INSERT … ON CONFLICT → existing? same hash → return stored response
     │                                                  different hash → 409
     ├─ usage_counters SELECT … FOR UPDATE (both metrics)
@@ -60,7 +63,7 @@ POST /generate
     ├─ usage_events INSERT (api_calls, ai_tokens) ; counters += qty
     └─ store 200 response on idempotency row ; COMMIT
 
-GET /usage  → counters + events for current period → pricing.cost(...) → {used, limit, remaining, cost}
+GET /usage  → SUM(usage_events) per metric + SUM of token columns → pricing.quote(...) → {used, limit, remaining, cost}
 
 POST /billing/checkout → Stripe Checkout Session (client_reference_id = tenant id) → {url}
 
@@ -70,4 +73,4 @@ POST /webhooks/stripe
   └─ 200 {"status":"queued"}
 worker: claim pending stripe_events → stripe_sync.apply(event) → mark done | retry w/ backoff | dead + alert
 ```
-Diagram for the README lives in `docs/diagram.md` once drawn (ASCII is acceptable per the brief).
+The architecture diagram (Mermaid) is in the [README](../README.md#architecture).
