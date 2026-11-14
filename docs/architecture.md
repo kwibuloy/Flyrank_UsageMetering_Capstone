@@ -24,7 +24,7 @@ app/
     alert_delivery.py     signed webhook or log sink for usage alerts
     stripe_sync.py        apply a verified Stripe event to tenant/subscription
     periods.py            billing-period boundaries (UTC calendar month)
-  repositories/           alerts.py, tenants.py, plans.py, usage.py, idempotency.py, subscriptions.py, stripe_events.py
+  repositories/           alerts.py, health.py, tenants.py, plans.py, usage.py, idempotency.py, subscriptions.py, stripe_events.py
   db/
     base.py, models.py, session.py
   jobs/
