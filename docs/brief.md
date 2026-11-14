@@ -1,6 +1,6 @@
-# The capstone contract (condensed from the FlyRank brief)
+# The capstone 
 
-Source: *FlyRank Internship · Backend Track · Capstone — Usage Metering & Billing Engine*. This file is the checklist we build against; the original PDF is not in the repo.
+Source: *FlyRank Internship · Backend Track · Capstone — Usage Metering & Billing Engine*. 
 
 ## Scope (deliberately small)
 - 2 plans: **Free** (1,000 API calls / month, 100,000 AI tokens / month) and **Pro** (our numbers, see [quotas.md](quotas.md)).
@@ -9,7 +9,8 @@ Source: *FlyRank Internship · Backend Track · Capstone — Usage Metering & Bi
 - Stripe **test mode only**. Stripe CLI for local webhooks. $0, never a credit card.
 - Not in core: invoicing, proration, overage billing (stretch goals only).
 
-## Requirements checklist — Done = every box ticked + one proof each in `EVIDENCE.md`
+## Requirements checklist 
+`EVIDENCE.md`
 | ID | Requirement | Primary doc |
 |---|---|---|
 | M1 | A billable action creates exactly one usage event, even under retries (idempotency key) | [idempotency.md](idempotency.md) |
