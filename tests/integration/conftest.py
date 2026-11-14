@@ -1,5 +1,9 @@
 """Integration fixtures: real Postgres (the compose test database), schema via Alembic."""
 
+import hashlib
+import hmac
+import json
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
@@ -35,8 +39,8 @@ def clean_db(migrated: None) -> Iterator[None]:
     with engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE usage_events, usage_counters, idempotency_keys, tenants "
-                "RESTART IDENTITY CASCADE"
+                "TRUNCATE usage_events, usage_counters, idempotency_keys, subscriptions, "
+                "stripe_events, tenants RESTART IDENTITY CASCADE"
             )
         )
     yield
@@ -116,3 +120,80 @@ def counters_match_events(tenant_id: uuid.UUID) -> bool:
             {"t": tenant_id},
         ).scalar_one()
     return mismatches == 0
+
+
+# --- Stripe helpers -----------------------------------------------------------------
+
+TEST_WEBHOOK_SECRET = "whsec_test_only"
+
+
+def stripe_event(
+    event_type: str, obj: dict, event_id: str | None = None, created: int | None = None
+):
+    return {
+        "id": event_id or f"evt_{uuid.uuid4().hex[:24]}",
+        "object": "event",
+        "type": event_type,
+        "created": created or int(time.time()),
+        "livemode": False,
+        "data": {"object": obj},
+    }
+
+
+def sign(payload: bytes, secret: str = TEST_WEBHOOK_SECRET, timestamp: int | None = None) -> str:
+    """Build a Stripe-Signature header exactly the way Stripe does (HMAC-SHA256)."""
+    ts = timestamp or int(time.time())
+    digest = hmac.new(secret.encode(), f"{ts}.".encode() + payload, hashlib.sha256).hexdigest()
+    return f"t={ts},v1={digest}"
+
+
+def post_webhook(client, event: dict, secret: str = TEST_WEBHOOK_SECRET):
+    payload = json.dumps(event).encode()
+    return client.post(
+        "/webhooks/stripe",
+        content=payload,
+        headers={"Stripe-Signature": sign(payload, secret), "Content-Type": "application/json"},
+    )
+
+
+def subscription_obj(tenant_id, sub_id="sub_test_1", status="active", customer="cus_test_1"):
+    return {
+        "id": sub_id,
+        "object": "subscription",
+        "customer": customer,
+        "status": status,
+        "metadata": {"tenant_id": str(tenant_id)},
+        "items": {"data": [{"current_period_end": 1_800_000_000}]},
+    }
+
+
+def checkout_obj(tenant_id, sub_id="sub_test_1", customer="cus_test_1"):
+    return {
+        "id": "cs_test_1",
+        "object": "checkout.session",
+        "mode": "subscription",
+        "client_reference_id": str(tenant_id),
+        "customer": customer,
+        "subscription": sub_id,
+        "metadata": {"tenant_id": str(tenant_id)},
+    }
+
+
+def stripe_event_row(event_id: str) -> dict | None:
+    with engine.connect() as conn:
+        row = (
+            conn.execute(
+                text(
+                    "SELECT status, attempts, outcome, last_error FROM stripe_events WHERE id = :i"
+                ),
+                {"i": event_id},
+            )
+            .mappings()
+            .first()
+        )
+    return dict(row) if row else None
+
+
+def stripe_event_count() -> int:
+    with engine.connect() as conn:
+        return conn.execute(text("SELECT count(*) FROM stripe_events")).scalar_one()

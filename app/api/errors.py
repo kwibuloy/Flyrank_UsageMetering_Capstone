@@ -9,10 +9,14 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.services.errors import (
+    AlreadySubscribed,
     AppError,
     IdempotencyKeyRequired,
     IdempotencyKeyReuse,
     InvalidIdempotencyKey,
+    InvalidSignature,
+    StripeNotConfigured,
+    StripeUpstreamError,
     Unauthorized,
 )
 
@@ -23,6 +27,10 @@ STATUS_BY_ERROR: dict[type[AppError], int] = {
     IdempotencyKeyRequired: 400,
     InvalidIdempotencyKey: 400,
     IdempotencyKeyReuse: 409,
+    InvalidSignature: 400,
+    AlreadySubscribed: 409,
+    StripeNotConfigured: 503,
+    StripeUpstreamError: 502,
 }
 
 

@@ -19,6 +19,7 @@ class TenantContext:
     plan_id: str
     limits: dict[str, int]
     subscription_status: str | None = None
+    stripe_customer_id: str | None = None
 
 
 def hash_api_key(api_key: str) -> str:
@@ -35,12 +36,14 @@ def authenticate(session: Session, api_key: str | None) -> TenantContext:
     found = tenants_repo.get_with_plan_by_key_hash(session, hash_api_key(api_key))
     if found is None:
         raise Unauthorized("Unknown API key.")
-    tenant, plan = found
+    tenant, plan, subscription = found
     return TenantContext(
         id=tenant.id,
         name=tenant.name,
         plan_id=plan.id,
         limits={API_CALLS: plan.api_calls_limit, AI_TOKENS: plan.ai_tokens_limit},
+        subscription_status=subscription.status if subscription else None,
+        stripe_customer_id=tenant.stripe_customer_id,
     )
 
 

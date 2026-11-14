@@ -4,7 +4,7 @@ import re
 from collections.abc import Iterator
 from typing import Annotated
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
@@ -46,5 +46,19 @@ def require_idempotency_key(idempotency_key: Annotated[str | None, Header()] = N
     return idempotency_key
 
 
+def optional_idempotency_key(
+    idempotency_key: Annotated[str | None, Header()] = None,
+) -> str | None:
+    if idempotency_key is None:
+        return None
+    return require_idempotency_key(idempotency_key)
+
+
+async def raw_body(request: Request) -> bytes:
+    return await request.body()
+
+
 CurrentTenant = Annotated[TenantContext, Depends(get_tenant)]
+OptionalIdempotencyKey = Annotated[str | None, Depends(optional_idempotency_key)]
+RawBody = Annotated[bytes, Depends(raw_body)]
 IdempotencyKeyHeader = Annotated[str, Depends(require_idempotency_key)]

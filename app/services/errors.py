@@ -26,3 +26,19 @@ class InvalidIdempotencyKey(AppError):
 
 class IdempotencyKeyReuse(AppError):
     code = "idempotency_key_reuse"
+
+
+class InvalidSignature(AppError):
+    code = "invalid_signature"
+
+
+class AlreadySubscribed(AppError):
+    code = "already_subscribed"
+
+
+class StripeNotConfigured(AppError):
+    code = "stripe_not_configured"
+
+
+class StripeUpstreamError(AppError):
+    code = "stripe_error"
